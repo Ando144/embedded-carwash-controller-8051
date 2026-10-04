@@ -1,0 +1,1251 @@
+ ;EQU
+SEM_BERDEA	EQU	P0.0
+SEM_GORRIA	EQU	P0.1
+S_PLAT		EQU	P0.2
+FICHA_TIPO 	EQU	P0.3
+S_FICHA 	EQU	P0.4
+P_START 	EQU	P0.5
+AL_START 	EQU	P0.6
+BPOS_START	EQU	P0.7
+BMOV_FRONT	EQU	P1.0
+BMOV_BACK	EQU	P1.1
+EV_URA		EQU	P2.0
+EV_XABOIA	EQU	P2.1
+S_CAR		EQU	P2.3
+FC_RV_CENTRO	EQU	P2.4
+FC_RV_BORDE	EQU	P2.5
+FC_RH_TOP	EQU	P1.2
+LED_LNOR	EQU	P2.6
+LED_LINT	EQU 	P2.7
+IN		EQU	P1.7	
+Out		EQU	P1.6
+Down		EQU	P1.4
+UP		EQU	P1.3
+EGOERA		EQU	R6
+GERTAERA	EQU	R7		
+PWM0		EQU	0XFC	;PWMak
+PWM1		EQU	0xFD
+PWMP		EQU	0xFE		
+IEN0		EQU	0xA8	;BAIMENA
+ADCON		EQU	0xC5	;ADC
+ADCH		EQU	0xC6
+kont50ms	EQU	0x22	;ALDAGAIAK
+kont1s		EQU	0x23
+tick100ms	EQU	0x20.0	;ETEN-FLAG(TIMER ETA ADC)
+tick1s		EQU	0x20.1	
+tick30s		EQU	0x20.2
+tick60s		EQU	0x20.3
+tick4s		EQU	0x20.4
+tick_adc0	EQU	0x20.5
+tick_adc1	EQU	0x20.6
+dist_egokia	EQU	0x20.7
+alt_egokia	EQU	0x21.1
+IN_PIZTU	EQU	0x21.2
+OUT_PIZTU	EQU	0x21.3
+UP_PIZTU	EQU	0x21.4
+DOWN_PIZTU	EQU	0x21.5
+FLAG0		EQU	0x21.2
+
+org 	0x00
+	AJMP Hasiera
+
+;--------------------ETENAK----------------------------------
+;TIMER_ETENA-------------------------------
+
+org	0x0B
+
+	PUSH	acc
+	PUSH	psw
+	MOV	TL0,#0xB0
+	MOV	TH0,#0x3C
+	INC	kont50ms
+	ACALL	UNITATE_BIHURKETA
+	ACALL	FLAG_KONP
+	POP	psw
+	POP	acc
+	RETI
+
+;ADC----------------------------------------	
+org	0x53
+
+	PUSH	acc
+	PUSH	psw
+	ANL	ADCON, #0xEF;ADCI=0
+	MOV	A,ADCON
+	ANL	A,#0x07
+	JZ	ADC0_ETEN
+	SETB	tick_adc1
+	AJMP	AMAITU_ETEN
+
+ADC0_ETEN:
+	SETB	tick_adc0
+
+AMAITU_ETEN:
+	POP	psw
+	POP	acc
+	reti	
+
+org	0x7f
+Hasiera:
+	Acall	Hasieraketak
+Begizta:
+	acall 	Egoera_Makina
+	ajmp	Begizta
+
+Hasieraketak:	;Hasieraketak	
+	mov	EGOERA,#0x07 ;-------------!
+	mov	GERTAERA,#0x00
+	anl	TMOD, #0xf0		;timer-a prog
+	orl	TMOD, #0x01	
+	SETB	S_PLAT			;SARRERAK DEFINITU
+	SETB	FICHA_TIPO
+	SETB	S_FICHA
+	SETB	P_START
+	SETB	S_CAR
+	SETB	BPOS_START
+       	SETB	FC_RV_CENTRO
+	SETB	FC_RV_BORDE
+	SETB	FC_RH_TOP
+	SETB	SEM_BERDEA		;IRTEERAK DEFINITU
+	CLR	SEM_GORRIA
+	CLR	AL_START
+	CLR	LED_LNOR
+	CLR	LED_LINT
+	CLR	AL_START
+	CLR	EV_URA
+	CLR	EV_XABOIA
+       	CLR	BMOV_BACK
+	CLR	BMOV_FRONT
+	CLR	IN
+	CLR	OUT
+	CLR	DOWN
+	CLR	UP
+	MOV	PWMP, #0x18		;pwm-a prog
+	MOV 	PWM0, #0xff
+	MOV	PWM1, #0xff
+	MOV	kont50ms,#0x00		;flag guztiak garbitu
+	MOV	kont1s,#0x00
+	CLR	tick100ms	
+	CLR	tick1s		
+	CLR	tick30s		
+	CLR	tick60s
+	CLR	tick4s
+	CLR	tick_adc0
+	CLR	tick_adc1
+	CLR	FLAG0
+	CLR	IN_PIZTU	
+	CLR	OUT_PIZTU	
+	CLR	UP_PIZTU	
+	CLR	DOWN_PIZTU	
+	RET
+
+;-----------EGOERA-MAKINA----------------
+
+Egoera_Makina:
+	mov	A,EGOERA
+	RL	A
+	MOV	DPTR,#Egoera_Zerrenda
+	JMP	@A+DPTR
+Egoera_Zerrenda:
+	ajmp	E0_Itxoin
+	ajmp	E1_Fitxa_Itxaroten
+	ajmp	E2_Hasi_Itxaroten
+	ajmp	E3_Hurbildu
+	ajmp	E4_Xaboia
+	ajmp	E5_Kokapen
+	ajmp	E6_Atzean_Garbitu
+	ajmp	E7_Arrabolak_Kokatu
+	ajmp	E8_Hurbildu
+	ajmp	E9_Garbitu
+	ajmp	E10_Hori_kokatu
+	ajmp	E11_Kokapen
+	ajmp	E12_Aurrean_Garbitu
+	ajmp	E13_Arrabolak_Kokatu
+	ajmp	E14_Kokatu
+	ajmp	E15_Ureztatu
+	ajmp	E16_KOKATU40cm
+	ajmp	E17_Kotxera_Hurbildu
+	ajmp	E18_Aireztatu
+	ajmp	E19_Kokatu_Hasieran
+	ajmp	E20_Keinuka
+
+;-------------------EGOERAK-------------------
+;-------------------ITXOITEN-----------------
+
+E0_ITXOIN:
+
+	ACALL	GERTAERA_SORGAILU_0
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_0
+	JMP	@A + DPTR
+EKINTZAK_0:
+	AJMP	E0_EK0
+	AJMP	E0_EK1
+
+GERTAERA_SORGAILU_0:
+	JB	S_PLAT, Gertaera0_1
+;Gertaera0_0:
+	MOV	GERTAERA,#0x00
+	RET
+Gertaera0_1:
+	MOV	GERTAERA,#0x01
+	RET
+
+E0_EK0:
+	RET
+
+E0_EK1:
+	SETB	SEM_GORRIA
+	CLR	SEM_BERDEA
+	mov	EGOERA,#0x01
+	ACALL	timer_hasieratu
+	RET
+
+;-----------------FITXA_ITXARON---------------------------
+
+E1_Fitxa_Itxaroten:
+	ACALL	GERTAERA_SORGAILU_1
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_1
+	JMP	@A + DPTR
+EKINTZAK_1:
+	AJMP	E1_EK0
+	AJMP	E1_EK1
+	AJMP	E1_EK2
+	AJMP	E1_EK3
+
+GERTAERA_SORGAILU_1:
+	JNB	S_PLAT,Gertaera1_3
+	JB	tick30s,Gertaera1_2
+	JB	S_FICHA,Gertaera1_1
+;Gertaera1_0:
+	MOV 	GERTAERA, #0x00
+	RET
+Gertaera1_1:
+	MOV 	GERTAERA, #0x01
+	RET
+Gertaera1_2:
+	CLR	tick30s
+	MOV	GERTAERA, #0x02
+	RET
+Gertaera1_3:
+	MOV	GERTAERA, #0x03
+	RET
+
+E1_EK0:
+	RET
+
+E1_EK1:
+	CLR	AL_START
+	CLR	tick30s
+	CLR	tick60s
+	CLR	kont50ms
+	CLR	kont1s
+	MOV	EGOERA,#0x02
+	RET
+
+E1_EK2:
+	SETB	AL_START
+	RET
+
+E1_EK3:
+	SETB	SEM_BERDEA
+	CLR 	SEM_GORRIA
+	CLR	AL_START
+	ACALL	Timer_Amatatu
+	MOV	EGOERA,#0x00
+	RET
+
+;-----------------E2_HASI_ITXAROTEN-------------------------
+
+E2_Hasi_Itxaroten:
+	ACALL	GERTAERA_SORGAILU_2
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_2
+	JMP	@A + DPTR
+EKINTZAK_2:
+	AJMP	E2_EK1
+	AJMP	E2_EK2
+	AJMP	E2_EK3
+	AJMP	E2_EK4
+
+GERTAERA_SORGAILU_2:
+	JB	tick60s,Gertaera2_2
+	JB	tick30s,Gertaera2_1
+	JB	P_START,Gertaera2_2
+	JNB	FICHA_TIPO,Gertaera2_3	
+	JB	FICHA_TIPO,Gertaera2_4
+GERTAERA2_1:
+	CLR 	tick30s
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA2_2:
+	CLR	Tick60s
+	MOV	GERTAERA,#0x01
+	RET
+GERTAERA2_3:
+	MOV	GERTAERA,#0x02
+	RET
+GERTAERA2_4:
+	MOV	GERTAERA,#0x03
+	RET
+
+E2_EK1:
+	SETB	AL_START
+	RET
+
+E2_EK2:
+	SETB	BMOV_FRONT
+	CLR	AL_START
+	ACALL	Timer_amatatu
+	MOV	EGOERA,#0x03
+	RET
+
+E2_EK3:
+	SETB	LED_LNOR
+	RET
+
+E2_EK4:
+	SETB	LED_LINT
+	RET
+
+;-----------------E3_HURBILDU-------------------------
+
+E3_HURBILDU:
+	ACALL	GERTAERA_SORGAILU_3
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_3
+	JMP	@A + DPTR
+EKINTZAK_3:
+	AJMP	E3_EK0
+	AJMP	E3_EK1
+GERTAERA_SORGAILU_3:
+	JB	S_CAR,Gertaera3_1
+;GERTAERA3_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA3_1:
+	MOV	GERTAERA,#0x01
+	RET
+
+E3_EK0:
+	RET
+
+E3_EK1:
+	SETB 	EV_URA
+	SETB	EV_XABOIA
+	MOV	EGOERA, #0x04	
+	RET
+
+;-----------------E4_Xaboia-------------------------
+
+E4_Xaboia:
+	ACALL	GERTAERA_SORGAILU_4
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_4
+	JMP	@A + DPTR
+EKINTZAK_4:
+	AJMP	E4_EK0
+	AJMP	E4_EK1
+GERTAERA_SORGAILU_4:
+	JNB	S_CAR,Gertaera4_1
+;GERTAERA4_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA4_1:
+	MOV	GERTAERA,#0x01
+	RET
+
+E4_EK0:
+	RET
+
+E4_EK1:
+	CLR 	EV_URA
+	CLR	EV_XABOIA
+	ACALL	Timer_Hasieratu
+	MOV	EGOERA, #0x05	
+	RET
+
+;-----------------E5_Kokapen-------------------------
+
+E5_Kokapen:
+	ACALL	GERTAERA_SORGAILU_5
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_5
+	JMP	@A + DPTR
+EKINTZAK_5:
+	AJMP	E5_EK0
+	AJMP	E5_EK1
+
+GERTAERA_SORGAILU_5:
+	JB	tick4s ,GERTAERA5_1
+;GERTAERA5_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA5_1:
+	CLR	Tick4s
+	MOV	GERTAERA,#0x01
+	RET
+
+E5_EK0:
+	RET
+
+E5_EK1:
+	ACALL	PWM0_Prog
+	CLR	BMOV_FRONT
+	SETB	IN
+	ACALL	Timer_Amatatu
+	MOV	EGOERA, #0x06	
+	RET
+
+;-----------------E6_Atzean_Garbitu-------------------------
+
+E6_Atzean_Garbitu:
+	ACALL	GERTAERA_SORGAILU_6
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_6
+	JMP	@A + DPTR
+EKINTZAK_6:
+	AJMP	E6_EK0
+	AJMP	E6_EK1
+
+GERTAERA_SORGAILU_6:
+	JB	FC_RV_CENTRO ,Gertaera6_1
+;GERTAERA6_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA6_1:
+	MOV	GERTAERA,#0x01
+	RET
+
+E6_EK0:
+	RET
+
+E6_EK1:
+	CLR	IN
+	SETB	OUT
+	MOV	EGOERA, #0x07	
+	RET
+
+;-----------------E7_Arrabolak_Kokatu-------------------------
+
+E7_Arrabolak_Kokatu:
+	ACALL	GERTAERA_SORGAILU_7
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_7
+	JMP	@A + DPTR
+EKINTZAK_7:
+	AJMP	E7_EK0
+	AJMP	E7_EK1
+	AJMP	E7_EK2
+
+GERTAERA_SORGAILU_7:
+	JB	S_CAR,	Gertaera7_2
+	JB	FC_RV_BORDE ,KONPROBATU_FLAG
+GERTAERA7_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA7_1:
+	MOV	GERTAERA,#0x01
+	RET
+GERTAERA7_2:
+	MOV	GERTAERA,#0x02
+	RET
+KONPROBATU_FLAG:
+	JB	FLAG0, Gertaera7_0
+	JMP	GERTAERA7_1
+
+E7_EK0:
+	RET
+
+E7_EK1:
+	CLR	OUT	
+	SETB	BMOV_BACK
+	SETB	FLAG0
+	RET
+
+E7_EK2:
+	SETB	IN
+	SETB	DOWN
+	CLR	BMOV_BACK	
+	MOV	EGOERA,#0x08
+	ACALL	timer_hasieratu
+	RET
+
+;-----------------E8_Hurbildu-------------------------
+
+E8_Hurbildu:
+	ACALL	GERTAERA_SORGAILU_8
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_8
+	JMP	@A + DPTR
+EKINTZAK_8:
+	AJMP	E8_EK0
+	AJMP	E8_EK1
+	AJMP	E8_EK2
+	AJMP	E8_EK3
+	AJMP	E8_EK4
+	AJMP	E8_EK5
+	AJMP	E8_EK6
+
+GERTAERA_SORGAILU_8:
+	JB	tick100ms,GERTAERA8_1
+	JB	tick_adc0,GERTAERA8_2
+	JB	tick_adc1,GERTAERA8_3
+;GERTAERA8_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA8_1:
+	clr	tick100ms
+	JB	dist_egokia,H_ONDO
+	MOV	GERTAERA,#0x01		;ADC0 ESKATU
+	RET
+H_ONDO:
+	MOV	GERTAERA,#0x02		;H ONDO DAGO, ADC1_ESKATU
+	RET
+GERTAERA8_2:				;ADC0	KONP
+	clr	tick_adc0
+	MOV	A,ADCH
+	CLR	C
+	CJNE	A,#0x69,H_EZ
+H_BAI:					;ADC0 ONDO DAGO, KONP ADC1 ONDO DAGOEN JADA
+	SETB	dist_egokia
+	JB	alt_egokia,V_BAI_H_BAI
+	MOV	GERTAERA,#0x03		;V EZ DAGO ONDO, H BAI
+	RET
+V_BAI_H_BAI:				;BIAK ONDO
+	MOV	GERTAERA,#0x04
+	RET
+H_EZ:					;ADC0 TXARTO KONP ADC1 ONDO DAGOEN JADA
+	JC	H_BAI
+	JB	alt_egokia,V_BAI_H_EZ
+	MOV	GERTAERA,#0x02		;BIAK TXARTO	
+	RET
+V_BAI_H_EZ:
+	MOV	GERTAERA,#0x00		;V ONDO
+	RET
+GERTAERA8_3:				;V KONP
+	clr	tick_adc1
+	MOV	A,ADCH
+	CLR	C
+	CJNE	A,#0x69,V_EZ
+V_BAI:					; V ONDO
+	SETB	ALT_EGOKIA
+	JB	dist_egokia,H_BAI_V_BAI
+	MOV	GERTAERA,#0x05		; H TXARTO ORAINDIK
+	RET
+H_BAI_V_BAI:				;BIAK ONDO
+	MOV	GERTAERA,#0x06
+	RET
+V_EZ:
+	JC	V_BAI			;V TXARTO BERAZ, ITXARON TICK 100ms heltzeko
+	MOV	GERTAERA,#0x00
+	RET
+
+E8_EK0:
+	RET
+
+E8_EK1:
+	mov	kont50ms,#0x00
+	mov	A,#0x00
+	acall	adc_hasieratu
+	RET
+
+E8_EK2:
+	mov	A,#0x01
+	acall	adc_hasieratu
+	RET
+
+E8_EK3:
+	clr	in
+	mov	A,#0x01
+	acall	adc_hasieratu
+	RET
+
+E8_EK4:
+	clr	in
+	SETB	BMOV_BACK
+	mov	EGOERA,#0x09
+	RET
+
+E8_EK5:
+	clr	down
+	RET
+
+E8_EK6:
+	clr	down
+	SETB	BMOV_BACK
+	mov	EGOERA,#0x09
+	RET
+
+;------------------E9_Garbitu-----------------------------
+
+E9_Garbitu:
+	ACALL	GERTAERA_SORGAILU_9
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_9
+	JMP	@A + DPTR
+EKINTZAK_9:
+	AJMP	E9_EK0
+	AJMP	E9_EK1
+	AJMP	E9_EK2
+	AJMP	E9_EK3
+	AJMP	E9_EK4
+	AJMP	E9_EK5
+	AJMP	E9_EK6
+	AJMP	E9_EK7
+	AJMP	E9_EK8
+	AJMP	E9_EK9
+	AJMP	E9_EK10
+
+GERTAERA_SORGAILU_9:
+	JNB	S_CAR,GERTAERA9_4
+	JB	tick100ms,GERTAERA9_1
+	JB	tick_adc0,GERTAERA9_2
+	JB	tick_adc1,GERTAERA9_3
+;GERTAERA9_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA9_1:
+	CLR	tick100ms
+	MOV	GERTAERA,#0x01
+	RET
+GERTAERA9_4:
+	MOV	GERTAERA,#0x09
+	RET
+GERTAERA9_2:
+	JB	IN_PIZTU,in_piztuta_dago
+	JB	OUT_PIZTU,out_piztuta_dago
+	clr	tick_adc0
+	MOV	A,ADCH
+	CLR	C
+	CJNE	A,#0x4D,H_txikiago_30
+H_EZ_30:
+	CLR	C
+	CJNE	A,#0x80,H_handiago_50
+	AJMP	H_EZ_50
+H_txikiago_30:
+	JNC	H_EZ_30
+	SETB	OUT_PIZTU
+	MOV	GERTAERA,#0x02		
+	RET
+H_handiago_50:
+	JC	H_EZ_50
+	SETB	IN_PIZTU
+	MOV	GERTAERA,#0x03
+	RET
+H_EZ_50:
+	MOV	GERTAERA,#0x00
+	RET
+in_piztuta_dago:
+	clr	tick_adc0
+	mov	A,ADCH
+	clr	C
+	cjne	A,#66h,H_handiago40
+H_txikiago40:
+	clr	IN_PIZTU
+	mov	GERTAERA,#0x05
+	ret
+H_handiago40:
+	JC	H_txikiago40
+	MOV	GERTAERA,#0x00
+	ret
+out_piztuta_dago:
+	clr	tick_adc0
+	mov	A,ADCH
+	clr	C
+	cjne	A,#66h,H_txikiago40_2
+H_handiago40_2:
+	CLR	OUT_PIZTU
+	mov	GERTAERA,#0x04
+	ret
+H_txikiago40_2:
+	JNC	H_handiago40_2
+	MOV	GERTAERA,#0x00
+	ret
+GERTAERA9_3:
+	JB	UP_PIZTU,up_piztuta_dago	
+	JB	DOWN_PIZTU,down_piztuta_dago
+	clr	tick_adc1
+	MOV	A,ADCH
+	CLR	C
+	CJNE	A,#0x4D,V_txikiago_30
+V_EZ_30:
+	CLR	C
+	CJNE	A,#0x80,V_handiago_50
+	AJMP	V_EZ_50
+V_txikiago_30:
+	JNC	V_EZ_30
+	SETB	UP_PIZTU
+	MOV	GERTAERA,#0x06		
+	RET
+V_handiago_50:
+	JC	V_EZ_50
+	SETB	DOWN_PIZTU
+	MOV	GERTAERA,#0x07
+	RET
+V_EZ_50:
+	MOV	GERTAERA,#0x00
+	RET
+up_piztuta_dago:
+	clr	tick_adc1
+	mov	A,ADCH
+	clr	C
+	cjne	A,#66h,V_txikiago40
+V_handiago40:
+	clr	UP_PIZTU
+	mov	GERTAERA,#0x0A
+	ret
+V_txikiago40:
+	JNC	V_handiago40
+	MOV	GERTAERA,#0x00
+	ret
+down_piztuta_dago:
+	clr	tick_adc1
+	mov	A,ADCH
+	clr	C
+	cjne	A,#66h,V_handiago40_2
+V_txikiago40_2:
+	clr	DOWN_PIZTU
+	mov	GERTAERA,#0x08
+	ret
+V_handiago40_2:
+	JC	V_txikiago40_2
+	MOV	GERTAERA,#0x00
+	ret
+
+E9_EK0:
+	ret
+
+E9_EK1:
+	mov	kont50ms,#0x00
+	MOV	A,#0x00
+	ACALL	adc_hasieratu
+	ret
+
+E9_EK2:
+	SETB	Out
+	MOV	A,#0x01
+	acall	adc_hasieratu
+	ret
+
+E9_EK3:
+	SETB	IN
+	MOV	A,#0x01
+	acall	adc_hasieratu
+	ret
+
+E9_EK4:
+	CLR	OUT
+	MOV	A,#0x01
+	acall	adc_hasieratu
+	ret
+
+E9_EK5:
+	CLR	IN
+	MOV	A,#0x01
+	acall	adc_hasieratu	
+	ret
+
+E9_EK6:
+	SETB	UP
+	ret
+
+E9_EK7:
+	SETB	DOWN
+	ret
+
+E9_EK8:
+	CLR	DOWN
+	ret
+
+E9_EK9:
+	CLR	BMOV_BACK
+	CLR	IN
+	CLR	DOWN
+	CLR	OUT
+	SETB	UP
+	acall	timer_amatatu
+	MOV	EGOERA,#0x0A
+	ret
+
+E9_EK10:
+	CLR	UP
+	ret
+
+;-----------------E10_Hori_Kokatu-------------------------
+
+E10_Hori_kokatu:
+	ACALL	GERTAERA_SORGAILU_10
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_10
+	JMP	@A + DPTR
+EKINTZAK_10:
+	AJMP	E10_EK0
+	AJMP	E10_EK1
+
+GERTAERA_SORGAILU_10:
+	JB	FC_RH_TOP,Gertaera10_1
+;GERTAERA10_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA10_1:
+	MOV	GERTAERA,#0x01
+	RET
+
+E10_EK0:
+	RET
+
+E10_EK1:
+	SETB	BMOV_BACK
+	CLR	UP
+	ACALL	Timer_Hasieratu
+	MOV	EGOERA, #0Bh	
+	RET
+
+;-----------------E11_Kokapen-------------------------
+
+E11_Kokapen:
+	ACALL	GERTAERA_SORGAILU_11
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_11
+	JMP	@A + DPTR
+EKINTZAK_11:
+	AJMP	E11_EK0
+	AJMP	E11_EK1
+
+GERTAERA_SORGAILU_11:
+	JB	tick4s ,Gertaera11_1
+;GERTAERA11_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA11_1:
+	MOV	GERTAERA,#0x01
+	RET
+
+E11_EK0:
+	RET
+
+E11_EK1:
+	CLR	BMOV_BACK
+	SETB	IN
+	ACALL	Timer_Amatatu
+	MOV	EGOERA, #0Ch	
+	RET
+
+;-----------------E12_Aurrean_Garbitu-------------------------
+
+E12_Aurrean_Garbitu:
+	ACALL	GERTAERA_SORGAILU_12
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_12
+	JMP	@A + DPTR
+EKINTZAK_12:
+	AJMP	E12_EK0
+	AJMP	E12_EK1
+
+GERTAERA_SORGAILU_12:
+	JB	FC_RV_CENTRO ,Gertaera12_1
+;GERTAERA12_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA12_1:
+	MOV	GERTAERA,#0x01
+	RET
+
+E12_EK0:
+	RET
+
+E12_EK1:
+	CLR	IN
+	SETB	OUT
+	MOV	EGOERA, #0Dh	
+	RET
+
+;-----------------E13_Arrabolak_Kokatu-------------------------
+
+E13_Arrabolak_Kokatu:
+	ACALL	GERTAERA_SORGAILU_13
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_13
+	JMP	@A + DPTR
+EKINTZAK_13:
+	AJMP	E13_EK0
+	AJMP	E13_EK1
+
+GERTAERA_SORGAILU_13:
+	JB	FC_RV_BORDE ,Gertaera13_1
+;GERTAERA13_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA13_1:
+	MOV	GERTAERA,#0x01
+	RET
+
+E13_EK0:
+	RET
+
+E13_EK1:
+	SETB	BMOV_FRONT
+	ACALL	PWM0_ITZALI
+	MOV	EGOERA, #0Eh	
+	RET
+
+;-----------------E14_Kokatu-------------------------
+
+E14_Kokatu:
+	ACALL	GERTAERA_SORGAILU_14
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_14
+	JMP	@A + DPTR
+EKINTZAK_14:
+	AJMP	E14_EK0
+	AJMP	E14_EK1
+
+GERTAERA_SORGAILU_14:
+	JB	S_CAR ,Gertaera14_1
+;GERTAERA14_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA14_1:
+	MOV	GERTAERA,#0x01
+	RET
+
+E14_EK0:
+	RET
+
+E14_EK1:
+	SETB	EV_URA
+	MOV	EGOERA, #0Fh	
+	RET
+
+;-----------------E15_Ureztatu-------------------------
+
+E15_Ureztatu:
+	ACALL	GERTAERA_SORGAILU_15
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_15
+	JMP	@A + DPTR
+EKINTZAK_15:
+	AJMP	E15_EK0
+	AJMP	E15_EK1
+
+GERTAERA_SORGAILU_15:
+	JNB	S_CAR ,Gertaera15_1
+;GERTAERA15_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA15_1:
+	MOV	GERTAERA,#0x01
+	RET
+
+E15_EK0:
+	RET
+
+E15_EK1:
+	CLR	EV_URA
+	ACALL	Timer_Hasieratu
+	MOV	EGOERA, #10h	
+	RET
+
+;-----------------E16_KOKATU40cm-------------------------
+
+E16_KOKATU40CM:
+	ACALL	GERTAERA_SORGAILU_16
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_16
+	JMP	@A + DPTR
+EKINTZAK_16:
+	AJMP	E16_EK0
+	AJMP	E16_EK1
+
+GERTAERA_SORGAILU_16:
+	JB	tick4s ,Gertaera16_1
+;GERTAERA16_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA16_1:
+	CLR	Tick4s
+	MOV	GERTAERA,#0x01
+	RET
+
+E16_EK0:
+	RET
+
+E16_EK1:
+	CLR	BMOV_FRONT
+	SETB	BMOV_BACK
+	ACALL	Timer_amatatu
+	MOV	EGOERA, #11h	
+	RET
+
+;-----------------E17_Kotxera_Hurbildu-------------------------
+
+E17_Kotxera_Hurbildu:
+	ACALL	GERTAERA_SORGAILU_17
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_17
+	JMP	@A + DPTR
+EKINTZAK_17:
+	AJMP	E17_EK0
+	AJMP	E17_EK1
+
+GERTAERA_SORGAILU_17:
+	JB	S_CAR ,Gertaera17_1
+;GERTAERA17_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA17_1:
+	MOV	GERTAERA,#0x01
+	RET
+
+E17_EK0:
+	RET
+
+E17_EK1:
+	ACALL	PWM1_Prog
+	MOV	EGOERA, #12h	
+	RET
+
+;-----------------E18_Aireztatu-------------------------
+
+E18_Aireztatu:
+	ACALL	GERTAERA_SORGAILU_18
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_18
+	JMP	@A + DPTR
+EKINTZAK_18:
+	AJMP	E18_EK0
+	AJMP	E18_EK1
+
+GERTAERA_SORGAILU_18:
+	JNB	S_CAR ,Gertaera18_1
+;GERTAERA18_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA18_1:
+	MOV	GERTAERA,#0x01
+	RET
+
+E18_EK0:
+	RET
+
+E18_EK1:
+	ACALL	PWM1_ITZALI
+	MOV	EGOERA, #13h	
+	RET
+
+;-----------------E19_Kokatu_Hasieran----------------------
+
+E19_Kokatu_Hasieran:
+	ACALL	GERTAERA_SORGAILU_19
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_19
+	JMP	@A + DPTR
+EKINTZAK_19:
+	AJMP	E19_EK0
+	AJMP	E19_EK1
+
+GERTAERA_SORGAILU_19:
+JB	BPOS_START ,Gertaera19_1
+;GERTAERA19_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA19_1:
+	MOV	GERTAERA,#0x01
+	RET
+
+E19_EK0:
+	RET
+
+E19_EK1:
+	ACALL	Timer_Hasieratu
+	CLR	BMOV_BACK
+	CLR	LED_LINT
+	CLR	LED_LNOR
+	CLR	SEM_GORRIA
+	SETB	SEM_BERDEA
+	MOV	EGOERA, #14h	
+	RET
+
+;-----------------E20_Keinuka-------------------------
+
+E20_Keinuka:
+	ACALL	GERTAERA_SORGAILU_20
+	MOV	A, GERTAERA
+	RL	A
+	MOV	DPTR, #EKINTZAK_20
+	JMP	@A + DPTR
+EKINTZAK_20:
+	AJMP	E20_EK0
+	AJMP	E20_EK1
+	AJMP	E20_EK2
+
+GERTAERA_SORGAILU_20:
+	JB	tick1s ,Gertaera20_1
+	JNB	S_PLAT, Gertaera20_2
+;GERTAERA20_0:
+	MOV	GERTAERA,#0x00
+	RET
+GERTAERA20_1:
+	CLR	Tick1s
+	MOV	GERTAERA,#0x01
+	RET
+GERTAERA20_2:
+	MOV	GERTAERA,#0x02
+	RET
+
+E20_EK0:
+	RET
+
+E20_EK1:
+	ACALL	TIMER_BIRHASIERATU
+	CPL 	SEM_BERDEA
+   	RET
+
+E20_EK2:
+	SETB	SEM_BERDEA
+	CLR	SEM_GORRIA
+	ACALL	Timer_Amatatu
+	MOV	EGOERA, #0x00
+
+;--------------------------TIMER HASIERATU----------------------
+
+TIMER_HASIERATU:		
+	MOV	TL0,#0xB0
+	MOV	TH0,#0x3C
+	orl	IEN0,#0x82
+	setb	TR0
+	RET
+
+;TIMER itzali--------------------------------------
+
+Timer_amatatu:
+	CLR 	TR0		
+	MOV	kont50ms,#0x00
+	MOV	kont1s,#0x00
+	CLR	tick100ms	
+	CLR	tick1s		
+	CLR	tick30s		
+	CLR	tick60s
+	CLR	tick4s
+	RET
+
+Timer_BirHasieratu:
+	MOV	TL0,#0xB0
+	MOV	TH0,#0x3C
+	orl	IEN0,#0x82
+	MOV	kont50ms,#0x00
+	MOV	kont1s,#0x00
+	CLR	tick100ms	
+	CLR	tick1s		
+	CLR	tick30s		
+	CLR	tick60s
+	CLR	tick4s
+	RET
+
+;----------------------------TIMER_KONT_ETA_FLAG-------------------------------
+
+UNITATE_BIHURKETA:
+	MOV	A,0x14
+	CJNE	A,kont50ms,amaitu_UB
+	inc	kont1s
+	mov	kont50ms,#0x00
+amaitu_UB:
+	RET
+
+FLAG_KONP:
+	MOV 	A,#0x02
+	CLR	C
+	CJNE	A,kont50ms,amaitu100ms
+	SETB	tick100ms
+amaitu100ms:
+	JNC	BUKAERA		
+	MOV 	A,#0x01		;konp_1s:
+	CLR	C
+	CJNE	A,kont1s,amaitu1s
+	SETB	tick1s
+amaitu1s:
+	JNC	BUKAERA		
+	MOV 	A,#0x04		;konp_4s:
+	CLR	C
+	CJNE	A,kont1s,amaitu4s
+	SETB	tick4s
+amaitu4s:
+	JNC	BUKAERA
+	MOV 	A,#0x1E		;konp_30s:
+	CLR	C
+	CJNE	A,kont1s,amaitu30s
+	SETB	tick30s
+amaitu30s:
+	JNC	BUKAERA
+	MOV 	A,#0x3C		;konp_60s:
+	CLR	C
+	CJNE	A,kont1s,amaitu60s
+	SETB	tick60s
+amaitu60s:
+	JNC	BUKAERA
+BUKAERA:
+	RET
+
+;--------------------------ADC_HASIERATU-------------------------------
+
+ADC_HASIERATU:
+;	CLR	tick_adc0
+;	CLR	tick_adc1
+	ANL	ADCON,#0xC8
+	ORL	ADCON,A
+	ORL	IEN0,#0xC0
+	ORL	ADCON,#0x08
+	RET
+
+;-----------------------AZPIERRUTINAK-------------------------------
+			;AKTIBATU----
+
+PWM0_Prog:
+	JB	Ficha_Tipo,PWM0_INT
+	MOV	PWM0,#0x80
+	ret
+PWM0_INT:	
+	MOV	PWM0,#0x80
+	ret
+
+PWM1_Prog:
+	JB	Ficha_Tipo,PWM1_INT
+	MOV	PWM1,#0x26
+	ret
+PWM1_INT:
+	MOV	PWM1,#0x00
+	ret
+
+			;ITZALI----
+
+PWM0_ITZALI:
+	MOV 	PWM0, #0xff
+	ret
+
+PWM1_ITZALI:
+	MOV	PWM1, #0xff
+	ret
+	
+END

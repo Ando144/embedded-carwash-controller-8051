@@ -1,74 +1,205 @@
-# Real-Time Industrial Car Wash Controller (80C552 / 8051 Assembly)
+<div align="center">
 
-An embedded real-time industrial automation system designed to control a multi-stage automated car wash tunnel. Developed in Assembly for the Philips/NXP 80C552 microcontroller (8051 core architecture) and simulated using Keil µVision.
+# Car Wash Tunnel Controller — 8051 Assembly
 
----
+**Real-time embedded controller for a fully automatic car wash, written from scratch in
+8051 assembly for the Philips/NXP 80C552 microcontroller.**
 
-## 🛠 Hardware Architecture & Peripherals
+![Language](https://img.shields.io/badge/language-8051%20Assembly-blue)
+![MCU](https://img.shields.io/badge/MCU-Philips%2FNXP%2080C552-informational)
+![Toolchain](https://img.shields.io/badge/toolchain-Keil%20%C2%B5Vision%20A51-orange)
+![Peripherals](https://img.shields.io/badge/peripherals-Timer%20%7C%20ADC%20%7C%20PWM%20%7C%20GPIO-success)
+![Status](https://img.shields.io/badge/status-complete%20(simulated)-brightgreen)
 
-* **Microcontroller Target:** Philips/NXP 80C552 (Intel 8051 derivative) @ 12 MHz oscillator.
-* **Core Language:** 8051 Assembly Language (ASM).
-* **Toolchain & Simulation:** Keil µVision2 IDE.
-* **Core Peripherals Used:**
-  * **Timer 0 (16-bit Mode):** Time-base generation via periodic hardware interrupts.
-  * **ADC (Analog-to-Digital Converter):** 8-bit resolution input tracking distance sensors (vertical and horizontal rollers).
-  * **PWM Generators (PWM0 & PWM1):** Frequency-matched actuator power management for roller agitation and air dryer blowers.
-  * **Parallel I/O Ports (P0–P2):** Interfacing optical vehicle presence sensors, mechanical limit switches, chemical dispensers, and signalization LEDs.
+</div>
 
 ---
 
-## ⚙ System Architecture: 21-State Finite State Machine (FSM)
+## Overview
 
-The control logic is governed by a non-blocking Finite State Machine (FSM) structured around 21 discrete states (E0 to E20), ensuring deterministic real-time response:
+The firmware runs a complete drive-through car wash: it detects the car, takes a token, lets the
+driver choose a **normal** or **intense** program, and then drives a moving gantry ("bridge")
+through **pre-wash → brushing → rinsing → drying**, before sending the bridge home and releasing
+the car.
 
-    [E0: Idle / Standby] 
-       └──> [E1–E2: Coin Validation & User Program Selection]
-       └──> [E3–E5: Vehicle Ingestion, Pre-wash Water & Chemical Soap Deployment]
-       └──> [E6–E13: Reactive Roller Positioning & Scrubbing Cycle]
-       └──> [E14–E16: High-Pressure Rinsing & Distance Re-alignment]
-       └──> [E17–E18: Automated Air Blower & Drying Subsystem]
-       └──> [E19–E20: Bridge Homing, Green Beacon Cycle & Platform Reset]
+During brushing the rollers are kept at a constant distance from the bodywork using two analog
+distance sensors, so the system adapts to the shape of each car in real time.
 
-* State dispatch is implemented through memory pointer table lookups (DPTR offset indexing via `JMP @A+DPTR`), eliminating deep branching overhead and guaranteeing fast interrupt-to-action transition times.
+Everything runs on an 8-bit 8051 core at 12 MHz with **no operating system and no C runtime**:
+about 1,300 lines of hand-written assembly built on interrupts, jump tables and on-chip
+peripherals.
 
----
+## Highlights
 
-## 📐 Hardware Calculations & Engineering Specifications
+| | |
+|---|---|
+| **21-state finite state machine** | Table-driven design: every state is an *event generator* plus an *action table*, both dispatched in constant time with `JMP @A+DPTR`. Adding or changing a state means editing a single block. |
+| **Interrupt-driven time base** | Timer 0 interrupts every **50 ms** and produces 100 ms, 1 s, 4 s, 30 s and 60 s software ticks for timeouts, delays and blinking. |
+| **Closed-loop roller control** | Two ADC channels measure the roller-to-car distance every 100 ms. The rollers are kept in a **30–50 cm** window with **hysteresis** around 40 cm, so the motors don't oscillate. |
+| **PWM motor and blower control** | PWM0 drives the brush motor and PWM1 the air dryer, whose power depends on the selected program (85 % normal, 100 % intense). |
+| **Short ISRs** | The interrupt routines only set flags. All decisions are taken in the main loop, which keeps interrupt latency low and the behaviour deterministic. |
+| **Fully documented** | Includes timer, ADC and PWM calculations, state, event and action tables, and an I/O map ([design document](docs/DESIGN.md)). |
 
-### 1. Timer 0 Periodic Interrupt (50 ms Time-Base)
-Configured to produce predictable software ticks for system timers (100 ms, 1 s, 4 s, 30 s, and 60 s):
-* F_osc = 12 MHz => T_machine = 12 / 12 MHz = 1 µs
-* Counts required for 50 ms: 50,000 counts.
-* 16-bit reload value: 65,536 - 50,000 = 15,536 = 0x3CB0
-* **Reload Registers:** `TH0 = 0x3C`, `TL0 = 0xB0`.
+## Wash cycle
 
-### 2. ADC Calibration & Sensor Digital Mapping
-Linear ultrasonic/optical distance sensors (50 mV/cm sensitivity, 0–5 V range, 8-bit quantization):
-Digital Value = 2^8 * (V_in - V_ref-) / (V_ref+ - V_ref-)
+```mermaid
+flowchart LR
+    A([Car on platform]) --> B[Token<br/>+ program select]
+    B --> C[Pre-wash<br/>water + soap]
+    C --> D[Brush rear<br/>vertical rollers]
+    D --> E[Brush top & sides<br/>ADC distance tracking]
+    E --> F[Brush front]
+    F --> G[Rinse]
+    G --> H[Dry<br/>PWM blower]
+    H --> I[Bridge home<br/>green light blinks]
+    I --> A
+```
 
-* **30 cm (1.5 V):** Value = 77 => **0x4D**
-* **40 cm (2.0 V, Target Operating Distance):** Value = 102 => **0x66**
-* **50 cm (2.5 V):** Value = 128 => **0x80**
+The full state diagram (E0–E20) with every transition is in
+[docs/DESIGN.md](docs/DESIGN.md#2-state-machine).
 
-### 3. PWM Actuator Modulation
-* Carrier frequency: F_PWM = 1 kHz.
-* Reload register: PWMP = (12 MHz / (2 * 255 * 1 kHz)) - 1 ≈ 24 = **0x18**.
-* **Motor Scrubbing (PWM0):** 50% duty cycle (0x80) / 100% duty cycle (0x00).
-* **Dryer Blowers (PWM1):** Configurable up to 85% duty cycle (0x26).
+## Architecture
 
----
+```mermaid
+flowchart LR
+    subgraph IN [Inputs]
+      S1[Platform / car /<br/>token sensors]
+      S2[START button]
+      S3[Limit switches]
+      S4[Distance sensors<br/>AIN0 / AIN1]
+    end
+    subgraph MCU [80C552 @ 12 MHz]
+      T[Timer 0 ISR<br/>50 ms ticks]
+      ADC[ADC ISR<br/>conversion done]
+      FSM[Main loop<br/>21-state FSM]
+      T --> FSM
+      ADC --> FSM
+    end
+    subgraph OUT [Outputs]
+      O1[Bridge motor<br/>fwd / back]
+      O2[Roller actuators<br/>in / out / up / down]
+      O3[PWM0 brush motor<br/>PWM1 dryer]
+      O4[Water & soap valves]
+      O5[Traffic light, LEDs,<br/>alarm]
+    end
+    S1 & S2 & S3 --> FSM
+    S4 --> ADC
+    FSM --> O1 & O2 & O3 & O4 & O5
+```
 
-## 📂 Repository Layout
+### How a state is implemented
 
-    ├── src/
-    │   └── carwash_controller.asm   # Full 80C552 Assembly source code
-    ├── docs/
-    │   ├── State_Machine_Diagram.png # State transition model visualization
-    │   └── 80C552_System_Report.pdf  # Comprehensive academic engineering documentation
-    └── README.md
+Every state follows the same three-step pattern, which keeps 21 states readable in assembly:
 
----
+```asm
+E5_Position:
+	ACALL	EVENT_GEN_5		; 1. read inputs / flags -> EVENT code in R7
+	MOV	A,EVENT
+	RL	A			;    AJMP is 2 bytes -> index x 2
+	MOV	DPTR,#ACTIONS_5
+	JMP	@A+DPTR			; 2. constant-time dispatch to the action
+ACTIONS_5:
+	AJMP	E5_ACT0			;    event 0: nothing happened
+	AJMP	E5_ACT1			;    event 1: 4 s elapsed
 
-## 👤 Academic Context
+E5_ACT1:				; 3. action: set outputs, change state
+	ACALL	PWM0_On			;    start brush motor
+	CLR	BRIDGE_FWD		;    stop bridge
+	SETB	VR_IN			;    close vertical rollers
+	ACALL	Timer_Stop
+	MOV	STATE,#0x06		;    -> E6 Wash rear
+	RET
+```
 
-Developed as the Final Laboratory Capstone Project for **Computer Architecture (Konputagailuen Arkitektura)** within the Management Information Systems Computer Engineering curriculum at the **School of Engineering of Bilbao (UPV/EHU)**. 
+### Closed-loop distance tracking (state E9)
+
+```
+ distance   < 30 cm   →  move roller away    (start correction, set *_ON flag)
+ distance   > 50 cm   →  move roller closer  (start correction, set *_ON flag)
+ correction running   →  stop when 40 cm is reached, clear flag
+```
+
+Sensor: 50 mV/cm on a 0–5 V, 8-bit ADC → `0x4D` = 30 cm, `0x66` = 40 cm, `0x80` = 50 cm.
+
+## Key numbers
+
+| Parameter | Value | How it's obtained |
+|-----------|-------|-------------------|
+| Machine cycle | 1 µs | 12 MHz / 12 |
+| Timer 0 reload | `TH0=0x3C`, `TL0=0xB0` | 2¹⁶ − 50 000 = 15 536 → 50 ms |
+| 1 s tick | 20 × 50 ms | software counter in the ISR |
+| ADC 30 / 40 / 50 cm | `0x4D` / `0x66` / `0x80` | 2⁸ · V<sub>in</sub> / 5 V |
+| PWM prescaler | `PWMP = 0x18` | ≈ 1 kHz carrier |
+| PWM duty | `0x80` = 50 %, `0x26` = 85 %, `0x00` = 100 % | D = (255 − PWMx) / 255 |
+
+Full derivations: [docs/DESIGN.md § Calculations](docs/DESIGN.md#5-calculations).
+
+## I/O map
+
+| Port | Signal | Dir. | Description |
+|------|--------|------|-------------|
+| P0.0 / P0.1 | `LIGHT_GREEN` / `LIGHT_RED` | out | Entry traffic light |
+| P0.2 | `S_PLATFORM` | in | Car on the entry platform |
+| P0.3 | `TOKEN_TYPE` | in | 0 = normal, 1 = intense program |
+| P0.4 | `S_TOKEN` | in | Token inserted |
+| P0.5 | `BTN_START` | in | START push-button |
+| P0.6 | `ALARM_START` | out | "Press START" alarm |
+| P0.7 | `S_BRIDGE_HOME` | in | Bridge at home position |
+| P1.0 / P1.1 | `BRIDGE_FWD` / `BRIDGE_BACK` | out | Bridge motor |
+| P1.2 | `LS_HR_TOP` | in | Horizontal roller top limit switch |
+| P1.3 / P1.4 | `HR_UP` / `HR_DOWN` | out | Horizontal roller actuator |
+| P1.6 / P1.7 | `VR_OUT` / `VR_IN` | out | Vertical rollers actuator |
+| P2.0 / P2.1 | `VALVE_WATER` / `VALVE_SOAP` | out | Solenoid valves |
+| P2.3 | `S_CAR` | in | Car detected under the bridge |
+| P2.4 / P2.5 | `LS_VR_CENTER` / `LS_VR_EDGE` | in | Vertical rollers limit switches |
+| P2.6 / P2.7 | `LED_NORMAL` / `LED_INTENSE` | out | Selected program LEDs |
+| AIN0 / AIN1 | H / V distance | analog | Vertical rollers / horizontal roller distance to the car |
+| PWM0 / PWM1 | — | PWM | Brush motor / air dryer |
+
+## Running it
+
+The project targets the **Keil µVision** simulator, so no hardware is needed.
+
+1. Create a new µVision project and select the device **Philips 80C552**.
+2. Add [`src/carwash_controller.asm`](src/carwash_controller.asm) to the project and build it (A51 assembler).
+3. Start a debug session using the simulator.
+4. Open **Peripherals → I/O-Ports** (P0, P1, P2), **A/D Converter** and the PWM dialog to drive the
+   inputs and watch the outputs.
+5. Set the analog distances from the command window, e.g. `AIN0 = 2.0` (40 cm) or `AIN1 = 1.4` (28 cm).
+
+> **Note:** the start-up state is set in `Init` with `MOV STATE,#0x07`, so the program starts at
+> E7 (roller positioning). Change it to `#0x00` to run the full cycle from Idle.
+
+## Repository structure
+
+```
+├── src/
+│   └── carwash_controller.asm        # Complete firmware (80C552, A51 syntax)
+├── docs/
+│   ├── DESIGN.md                     # English design document: FSM, tables, calculations, glossary
+│   └── original-basque/
+│       ├── Final_Report_Basque.pdf   # Original lab report (Basque)
+│       └── State_Diagram_Basque.pdf  # Original hand-drawn state diagram (Basque)
+└── README.md
+```
+
+## Skills demonstrated
+
+- Low-level programming of the 8051 architecture (bit-addressable RAM, SFRs, addressing modes, stack)
+- Interrupt design: vector table, context saving, ISR/main-loop communication through flags
+- Peripheral configuration from datasheet formulas: 16-bit timer, 8-bit ADC, PWM generator
+- Designing an event-driven finite state machine and implementing it efficiently in assembly
+- Closed-loop control with hysteresis using sensor feedback
+- Engineering documentation: state, event and action tables, flowcharts, calculations
+
+## Authors
+
+- **Andoni Ortiz de Zárate Urruela** — [@Ando144](https://github.com/Ando144)
+- **Markel Valle Vivanco**
+
+Final lab project for **Computer Architecture** (*Konputagailuen Arkitektura*), Department of
+Electronic Technology, Bachelor's Degree in Computer Engineering in Management and Information
+Systems. **Bilbao School of Engineering, University of the Basque Country (UPV/EHU)**, 2024–2025.
+
+The source code and documentation were originally written in Basque and have been translated
+into English. The original report is kept in [`docs/original-basque`](docs/original-basque).

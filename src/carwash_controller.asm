@@ -1,1216 +1,1301 @@
- ;EQU
-SEM_BERDEA	EQU	P0.0
-SEM_GORRIA	EQU	P0.1
-S_PLAT		EQU	P0.2
-FICHA_TIPO 	EQU	P0.3
-S_FICHA 	EQU	P0.4
-P_START 	EQU	P0.5
-AL_START 	EQU	P0.6
-BPOS_START	EQU	P0.7
-BMOV_FRONT	EQU	P1.0
-BMOV_BACK	EQU	P1.1
-EV_URA		EQU	P2.0
-EV_XABOIA	EQU	P2.1
-S_CAR		EQU	P2.3
-FC_RV_CENTRO	EQU	P2.4
-FC_RV_BORDE	EQU	P2.5
-FC_RH_TOP	EQU	P1.2
-LED_LNOR	EQU	P2.6
-LED_LINT	EQU 	P2.7
-IN		EQU	P1.7	
-Out		EQU	P1.6
-Down		EQU	P1.4
-UP		EQU	P1.3
-EGOERA		EQU	R6
-GERTAERA	EQU	R7		
-PWM0		EQU	0XFC	;PWMak
-PWM1		EQU	0xFD
-PWMP		EQU	0xFE		
-IEN0		EQU	0xA8	;BAIMENA
-ADCON		EQU	0xC5	;ADC
-ADCH		EQU	0xC6
-kont50ms	EQU	0x22	;ALDAGAIAK
-kont1s		EQU	0x23
-tick100ms	EQU	0x20.0	;ETEN-FLAG(TIMER ETA ADC)
-tick1s		EQU	0x20.1	
-tick30s		EQU	0x20.2
-tick60s		EQU	0x20.3
-tick4s		EQU	0x20.4
-tick_adc0	EQU	0x20.5
-tick_adc1	EQU	0x20.6
-dist_egokia	EQU	0x20.7
-alt_egokia	EQU	0x21.1
-IN_PIZTU	EQU	0x21.2
-OUT_PIZTU	EQU	0x21.3
-UP_PIZTU	EQU	0x21.4
-DOWN_PIZTU	EQU	0x21.5
-FLAG0		EQU	0x21.2
+;==============================================================================
+;  Real-Time Car Wash Tunnel Controller
+;  Target    : Philips/NXP 80C552 (8051 core) @ 12 MHz
+;  Toolchain : Keil uVision2 (A51 assembler) - simulated in the uVision debugger
+;  Authors   : Andoni Ortiz de Zarate Urruela, Markel Valle Vivanco
+;  Course    : Computer Architecture (Konputagailuen Arkitektura), UPV/EHU
+;
+;  Architecture
+;    - 21-state finite state machine (E0..E20) run from the main loop.
+;      Each state = event generator (EVENT_GEN_n) + action table (ACTIONS_n),
+;      both dispatched with jump tables (JMP @A+DPTR).
+;    - Timer 0 ISR : 50 ms time base -> tick100ms / tick1s / tick4s /
+;                    tick30s / tick60s software flags.
+;    - ADC ISR     : end-of-conversion -> tick_adc0 / tick_adc1 flags.
+;    - PWM0        : roller motor.  PWM1 : air dryer.
+;
+;  Distance annotation (kept from the original report)
+;    "H" = horizontal distance from the VERTICAL rollers to the car  -> AIN0
+;    "V" = vertical distance from the HORIZONTAL roller to the car   -> AIN1
+;    ADC thresholds (50 mV/cm, 0-5 V, 8 bit): 0x4D=30cm 0x66=40cm 0x80=50cm
+;
+;  Naming: VR_ = vertical rollers, HR_ = horizontal roller, LS_ = limit switch,
+;          S_ = sensor, ACT = action, EVENT = event code (register R7)
+;==============================================================================
 
-org 	0x00
-	AJMP Hasiera
+;------------------------------------------------------------------------------
+; SYMBOL DEFINITIONS (EQU)
+;------------------------------------------------------------------------------
+LIGHT_GREEN     EQU	P0.0		;out: traffic light, green
+LIGHT_RED       EQU	P0.1		;out: traffic light, red
+S_PLATFORM      EQU	P0.2		;in : car on the entry platform
+TOKEN_TYPE      EQU	P0.3		;in : token type (0 = normal, 1 = intense)
+S_TOKEN         EQU	P0.4		;in : token inserted
+BTN_START       EQU	P0.5		;in : START push-button
+ALARM_START     EQU	P0.6		;out: "press START" alarm
+S_BRIDGE_HOME   EQU	P0.7		;in : bridge at home position
+BRIDGE_FWD      EQU	P1.0		;out: bridge moves forward
+BRIDGE_BACK     EQU	P1.1		;out: bridge moves backward
+VALVE_WATER     EQU	P2.0		;out: water solenoid valve
+VALVE_SOAP      EQU	P2.1		;out: soap solenoid valve
+S_CAR           EQU	P2.3		;in : car detected under the bridge
+LS_VR_CENTER    EQU	P2.4		;in : vertical rollers limit switch, centre
+LS_VR_EDGE      EQU	P2.5		;in : vertical rollers limit switch, edge
+LS_HR_TOP       EQU	P1.2		;in : horizontal roller limit switch, top
+LED_NORMAL      EQU	P2.6		;out: "normal program" LED
+LED_INTENSE     EQU	P2.7		;out: "intense program" LED
+VR_IN           EQU	P1.7		;out: vertical rollers move in
+VR_OUT          EQU	P1.6		;out: vertical rollers move out
+HR_DOWN         EQU	P1.4		;out: horizontal roller moves down
+HR_UP           EQU	P1.3		;out: horizontal roller moves up
+STATE           EQU	R6		;current FSM state (0..20)
+EVENT           EQU	R7		;event code produced by EVENT_GEN_n
+PWM0            EQU	0xFC		;PWM0 duty register - roller motor
+PWM1            EQU	0xFD		;PWM1 duty register - air dryer
+PWMP            EQU	0xFE		;PWM prescaler
+IEN0            EQU	0xA8		;interrupt enable register (EA, EAD, ET0...)
+ADCON           EQU	0xC5		;ADC control register
+ADCH            EQU	0xC6		;ADC result (8 MSB)
+cnt50ms         EQU	0x22		;50 ms counter (incremented by the Timer 0 ISR)
+cnt1s           EQU	0x23		;seconds counter
+tick100ms       EQU	0x20.0		;tick flags set by Flag_Compare
+tick1s          EQU	0x20.1
+tick30s         EQU	0x20.2
+tick60s         EQU	0x20.3
+tick4s          EQU	0x20.4
+tick_adc0       EQU	0x20.5		;conversion finished on AIN0 (set by ADC ISR)
+tick_adc1       EQU	0x20.6		;conversion finished on AIN1 (set by ADC ISR)
+dist_ok         EQU	0x20.7		;E8: H distance reached
+height_ok       EQU	0x21.1		;E8: V distance reached
+VR_IN_ON        EQU	0x21.2		;E9: correction in progress, rollers IN
+VR_OUT_ON       EQU	0x21.3		;E9: correction in progress, rollers OUT
+HR_UP_ON        EQU	0x21.4		;E9: correction in progress, roller UP
+HR_DOWN_ON      EQU	0x21.5		;E9: correction in progress, roller DOWN
+FLAG0           EQU	0x21.2		;E7: bridge reversal done (NOTE: same bit address as VR_IN_ON)
 
-;--------------------ETENAK----------------------------------
-;TIMER_ETENA-------------------------------
+ORG	0x00
+	AJMP	Main
 
-org	0x0B
+;------------------------------------------------------------------------------
+; TIMER 0 INTERRUPT (vector 0x0B) - 50 ms time base
+;------------------------------------------------------------------------------
 
-	PUSH	acc
-	PUSH	psw
+ORG	0x0B
+
+	PUSH	ACC
+	PUSH	PSW
 	MOV	TL0,#0xB0
 	MOV	TH0,#0x3C
-	INC	kont50ms
-	ACALL	UNITATE_BIHURKETA
-	ACALL	FLAG_KONP
-	POP	psw
-	POP	acc
+	INC	cnt50ms
+	ACALL	Unit_Conversion
+	ACALL	Flag_Compare
+	POP	PSW
+	POP	ACC
 	RETI
 
-;ADC----------------------------------------	
-org	0x53
+;------------------------------------------------------------------------------
+; ADC INTERRUPT (vector 0x53) - end of conversion
+;------------------------------------------------------------------------------
+ORG	0x53
 
-	PUSH	acc
-	PUSH	psw
-	ANL	ADCON, #0xEF;ADCI=0
+	PUSH	ACC
+	PUSH	PSW
+	ANL	ADCON,#0xEF		;clear ADCI (ADC interrupt flag)
 	MOV	A,ADCON
 	ANL	A,#0x07
-	JZ	ADC0_ETEN
+	JZ	ADC0_Done
 	SETB	tick_adc1
-	AJMP	AMAITU_ETEN
+	AJMP	ADC_ISR_Exit
 
-ADC0_ETEN:
+ADC0_Done:
 	SETB	tick_adc0
 
-AMAITU_ETEN:
-	POP	psw
-	POP	acc
-	reti	
+ADC_ISR_Exit:
+	POP	PSW
+	POP	ACC
+	RETI
 
-org	0x7f
-Hasiera:
-	Acall	Hasieraketak
-Begizta:
-	acall 	Egoera_Makina
-	ajmp	Begizta
+ORG	0x7F
+Main:
+	ACALL	Init
+Main_Loop:
+	ACALL	State_Machine
+	AJMP	Main_Loop
 
-Hasieraketak:	;Hasieraketak	
-	mov	EGOERA,#0x07 ;-------------!
-	mov	GERTAERA,#0x00
-	anl	TMOD, #0xf0		;timer-a prog
-	orl	TMOD, #0x01	
-	SETB	S_PLAT			;SARRERAK DEFINITU
-	SETB	FICHA_TIPO
-	SETB	S_FICHA
-	SETB	P_START
+Init:
+	MOV	STATE,#0x07		;-------------! initial state (0x07 = E7)
+	MOV	EVENT,#0x00
+	ANL	TMOD,#0xF0		;program Timer 0 (mode 1, 16-bit)
+	ORL	TMOD,#0x01
+	SETB	S_PLATFORM		;configure inputs (write 1 = input)
+	SETB	TOKEN_TYPE
+	SETB	S_TOKEN
+	SETB	BTN_START
 	SETB	S_CAR
-	SETB	BPOS_START
-       	SETB	FC_RV_CENTRO
-	SETB	FC_RV_BORDE
-	SETB	FC_RH_TOP
-	SETB	SEM_BERDEA		;IRTEERAK DEFINITU
-	CLR	SEM_GORRIA
-	CLR	AL_START
-	CLR	LED_LNOR
-	CLR	LED_LINT
-	CLR	AL_START
-	CLR	EV_URA
-	CLR	EV_XABOIA
-       	CLR	BMOV_BACK
-	CLR	BMOV_FRONT
-	CLR	IN
-	CLR	OUT
-	CLR	DOWN
-	CLR	UP
-	MOV	PWMP, #0x18		;pwm-a prog
-	MOV 	PWM0, #0xff
-	MOV	PWM1, #0xff
-	MOV	kont50ms,#0x00		;flag guztiak garbitu
-	MOV	kont1s,#0x00
-	CLR	tick100ms	
-	CLR	tick1s		
-	CLR	tick30s		
+	SETB	S_BRIDGE_HOME
+	SETB	LS_VR_CENTER
+	SETB	LS_VR_EDGE
+	SETB	LS_HR_TOP
+	SETB	LIGHT_GREEN		;configure outputs (initial values)
+	CLR	LIGHT_RED
+	CLR	ALARM_START
+	CLR	LED_NORMAL
+	CLR	LED_INTENSE
+	CLR	ALARM_START
+	CLR	VALVE_WATER
+	CLR	VALVE_SOAP
+	CLR	BRIDGE_BACK
+	CLR	BRIDGE_FWD
+	CLR	VR_IN
+	CLR	VR_OUT
+	CLR	HR_DOWN
+	CLR	HR_UP
+	MOV	PWMP,#0x18		;program the PWM prescaler (1 kHz)
+	MOV	PWM0,#0xFF
+	MOV	PWM1,#0xFF
+	MOV	cnt50ms,#0x00		;clear all counters and flags
+	MOV	cnt1s,#0x00
+	CLR	tick100ms
+	CLR	tick1s
+	CLR	tick30s
 	CLR	tick60s
 	CLR	tick4s
 	CLR	tick_adc0
 	CLR	tick_adc1
 	CLR	FLAG0
-	CLR	IN_PIZTU	
-	CLR	OUT_PIZTU	
-	CLR	UP_PIZTU	
-	CLR	DOWN_PIZTU	
+	CLR	VR_IN_ON
+	CLR	VR_OUT_ON
+	CLR	HR_UP_ON
+	CLR	HR_DOWN_ON
 	RET
 
-;-----------EGOERA-MAKINA----------------
+;------------------------------------------------------------------------------
+; STATE MACHINE DISPATCHER  (STATE in R6, jump table)
+;------------------------------------------------------------------------------
 
-Egoera_Makina:
-	mov	A,EGOERA
+State_Machine:
+	MOV	A,STATE
 	RL	A
-	MOV	DPTR,#Egoera_Zerrenda
+	MOV	DPTR,#State_Table
 	JMP	@A+DPTR
-Egoera_Zerrenda:
-	ajmp	E0_Itxoin
-	ajmp	E1_Fitxa_Itxaroten
-	ajmp	E2_Hasi_Itxaroten
-	ajmp	E3_Hurbildu
-	ajmp	E4_Xaboia
-	ajmp	E5_Kokapen
-	ajmp	E6_Atzean_Garbitu
-	ajmp	E7_Arrabolak_Kokatu
-	ajmp	E8_Hurbildu
-	ajmp	E9_Garbitu
-	ajmp	E10_Hori_kokatu
-	ajmp	E11_Kokapen
-	ajmp	E12_Aurrean_Garbitu
-	ajmp	E13_Arrabolak_Kokatu
-	ajmp	E14_Kokatu
-	ajmp	E15_Ureztatu
-	ajmp	E16_KOKATU40cm
-	ajmp	E17_Kotxera_Hurbildu
-	ajmp	E18_Aireztatu
-	ajmp	E19_Kokatu_Hasieran
-	ajmp	E20_Keinuka
+State_Table:
+	AJMP	E0_Idle
+	AJMP	E1_Wait_Token
+	AJMP	E2_Wait_Start
+	AJMP	E3_Approach
+	AJMP	E4_Soap
+	AJMP	E5_Position
+	AJMP	E6_Wash_Rear
+	AJMP	E7_Place_Rollers
+	AJMP	E8_Approach_Rollers
+	AJMP	E9_Wash
+	AJMP	E10_Raise_HRoller
+	AJMP	E11_Position
+	AJMP	E12_Wash_Front
+	AJMP	E13_Place_Rollers
+	AJMP	E14_Position_Rinse
+	AJMP	E15_Rinse
+	AJMP	E16_Position_40cm
+	AJMP	E17_Approach_Car
+	AJMP	E18_Dry
+	AJMP	E19_Return_Home
+	AJMP	E20_Blink
 
-;-------------------EGOERAK-------------------
-;-------------------ITXOITEN-----------------
+;------------------------------------------------------------------------------
+; STATES
+;------------------------------------------------------------------------------
+;------------------------------------------------------------------------------
+; E0  IDLE            Wait for a car on the platform (S_PLATFORM).
+;------------------------------------------------------------------------------
 
-E0_ITXOIN:
+E0_Idle:
 
-	ACALL	GERTAERA_SORGAILU_0
-	MOV	A, GERTAERA
+	ACALL	EVENT_GEN_0
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_0
-	JMP	@A + DPTR
-EKINTZAK_0:
-	AJMP	E0_EK0
-	AJMP	E0_EK1
+	MOV	DPTR,#ACTIONS_0
+	JMP	@A+DPTR
+ACTIONS_0:
+	AJMP	E0_ACT0
+	AJMP	E0_ACT1
 
-GERTAERA_SORGAILU_0:
-	JB	S_PLAT, Gertaera0_1
-;Gertaera0_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_0:
+	JB	S_PLATFORM,EVENT0_1
+;EVENT0_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-Gertaera0_1:
-	MOV	GERTAERA,#0x01
-	RET
-
-E0_EK0:
+EVENT0_1:
+	MOV	EVENT,#0x01
 	RET
 
-E0_EK1:
-	SETB	SEM_GORRIA
-	CLR	SEM_BERDEA
-	mov	EGOERA,#0x01
-	ACALL	timer_hasieratu
+E0_ACT0:
 	RET
 
-;-----------------FITXA_ITXARON---------------------------
+E0_ACT1:
+	SETB	LIGHT_RED
+	CLR	LIGHT_GREEN
+	MOV	STATE,#0x01
+	ACALL	Timer_Start
+	RET
 
-E1_Fitxa_Itxaroten:
-	ACALL	GERTAERA_SORGAILU_1
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E1  WAIT_TOKEN      Wait for a token. 30 s -> alarm. Car leaves -> back to E0.
+;------------------------------------------------------------------------------
+
+E1_Wait_Token:
+	ACALL	EVENT_GEN_1
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_1
-	JMP	@A + DPTR
-EKINTZAK_1:
-	AJMP	E1_EK0
-	AJMP	E1_EK1
-	AJMP	E1_EK2
-	AJMP	E1_EK3
+	MOV	DPTR,#ACTIONS_1
+	JMP	@A+DPTR
+ACTIONS_1:
+	AJMP	E1_ACT0
+	AJMP	E1_ACT1
+	AJMP	E1_ACT2
+	AJMP	E1_ACT3
 
-GERTAERA_SORGAILU_1:
-	JNB	S_PLAT,Gertaera1_3
-	JB	tick30s,Gertaera1_2
-	JB	S_FICHA,Gertaera1_1
-;Gertaera1_0:
-	MOV 	GERTAERA, #0x00
+EVENT_GEN_1:
+	JNB	S_PLATFORM,EVENT1_3
+	JB	tick30s,EVENT1_2
+	JB	S_TOKEN,EVENT1_1
+;EVENT1_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-Gertaera1_1:
-	MOV 	GERTAERA, #0x01
+EVENT1_1:
+	MOV	EVENT,#0x01
 	RET
-Gertaera1_2:
+EVENT1_2:
 	CLR	tick30s
-	MOV	GERTAERA, #0x02
+	MOV	EVENT,#0x02
 	RET
-Gertaera1_3:
-	MOV	GERTAERA, #0x03
-	RET
-
-E1_EK0:
+EVENT1_3:
+	MOV	EVENT,#0x03
 	RET
 
-E1_EK1:
-	CLR	AL_START
+E1_ACT0:
+	RET
+
+E1_ACT1:
+	CLR	ALARM_START
 	CLR	tick30s
 	CLR	tick60s
-	CLR	kont50ms
-	CLR	kont1s
-	MOV	EGOERA,#0x02
+	CLR	cnt50ms
+	CLR	cnt1s
+	MOV	STATE,#0x02
 	RET
 
-E1_EK2:
-	SETB	AL_START
+E1_ACT2:
+	SETB	ALARM_START
 	RET
 
-E1_EK3:
-	SETB	SEM_BERDEA
-	CLR 	SEM_GORRIA
-	CLR	AL_START
-	ACALL	Timer_Amatatu
-	MOV	EGOERA,#0x00
+E1_ACT3:
+	SETB	LIGHT_GREEN
+	CLR	LIGHT_RED
+	CLR	ALARM_START
+	ACALL	Timer_Stop
+	MOV	STATE,#0x00
 	RET
 
-;-----------------E2_HASI_ITXAROTEN-------------------------
+;------------------------------------------------------------------------------
+; E2  WAIT_START      Program LED by token type. START button or 60 s -> go. 30 s -> alarm.
+;------------------------------------------------------------------------------
 
-E2_Hasi_Itxaroten:
-	ACALL	GERTAERA_SORGAILU_2
-	MOV	A, GERTAERA
+E2_Wait_Start:
+	ACALL	EVENT_GEN_2
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_2
-	JMP	@A + DPTR
-EKINTZAK_2:
-	AJMP	E2_EK1
-	AJMP	E2_EK2
-	AJMP	E2_EK3
-	AJMP	E2_EK4
+	MOV	DPTR,#ACTIONS_2
+	JMP	@A+DPTR
+ACTIONS_2:
+	AJMP	E2_ACT0
+	AJMP	E2_ACT1
+	AJMP	E2_ACT2
+	AJMP	E2_ACT3
 
-GERTAERA_SORGAILU_2:
-	JB	tick60s,Gertaera2_2
-	JB	tick30s,Gertaera2_1
-	JB	P_START,Gertaera2_2
-	JNB	FICHA_TIPO,Gertaera2_3	
-	JB	FICHA_TIPO,Gertaera2_4
-GERTAERA2_1:
-	CLR 	tick30s
-	MOV	GERTAERA,#0x00
+EVENT_GEN_2:
+	JB	tick60s,EVENT2_1
+	JB	tick30s,EVENT2_0
+	JB	BTN_START,EVENT2_1
+	JNB	TOKEN_TYPE,EVENT2_2
+	JB	TOKEN_TYPE,EVENT2_3
+EVENT2_0:
+	CLR	tick30s
+	MOV	EVENT,#0x00
 	RET
-GERTAERA2_2:
-	CLR	Tick60s
-	MOV	GERTAERA,#0x01
+EVENT2_1:
+	CLR	tick60s
+	MOV	EVENT,#0x01
 	RET
-GERTAERA2_3:
-	MOV	GERTAERA,#0x02
+EVENT2_2:
+	MOV	EVENT,#0x02
 	RET
-GERTAERA2_4:
-	MOV	GERTAERA,#0x03
-	RET
-
-E2_EK1:
-	SETB	AL_START
+EVENT2_3:
+	MOV	EVENT,#0x03
 	RET
 
-E2_EK2:
-	SETB	BMOV_FRONT
-	CLR	AL_START
-	ACALL	Timer_amatatu
-	MOV	EGOERA,#0x03
+E2_ACT0:
+	SETB	ALARM_START
 	RET
 
-E2_EK3:
-	SETB	LED_LNOR
+E2_ACT1:
+	SETB	BRIDGE_FWD
+	CLR	ALARM_START
+	ACALL	Timer_Stop
+	MOV	STATE,#0x03
 	RET
 
-E2_EK4:
-	SETB	LED_LINT
+E2_ACT2:
+	SETB	LED_NORMAL
 	RET
 
-;-----------------E3_HURBILDU-------------------------
+E2_ACT3:
+	SETB	LED_INTENSE
+	RET
 
-E3_HURBILDU:
-	ACALL	GERTAERA_SORGAILU_3
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E3  APPROACH        Bridge moves forward until the car is detected -> water + soap ON.
+;------------------------------------------------------------------------------
+
+E3_Approach:
+	ACALL	EVENT_GEN_3
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_3
-	JMP	@A + DPTR
-EKINTZAK_3:
-	AJMP	E3_EK0
-	AJMP	E3_EK1
-GERTAERA_SORGAILU_3:
-	JB	S_CAR,Gertaera3_1
-;GERTAERA3_0:
-	MOV	GERTAERA,#0x00
+	MOV	DPTR,#ACTIONS_3
+	JMP	@A+DPTR
+ACTIONS_3:
+	AJMP	E3_ACT0
+	AJMP	E3_ACT1
+EVENT_GEN_3:
+	JB	S_CAR,EVENT3_1
+;EVENT3_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA3_1:
-	MOV	GERTAERA,#0x01
-	RET
-
-E3_EK0:
+EVENT3_1:
+	MOV	EVENT,#0x01
 	RET
 
-E3_EK1:
-	SETB 	EV_URA
-	SETB	EV_XABOIA
-	MOV	EGOERA, #0x04	
+E3_ACT0:
 	RET
 
-;-----------------E4_Xaboia-------------------------
+E3_ACT1:
+	SETB	VALVE_WATER
+	SETB	VALVE_SOAP
+	MOV	STATE,#0x04
+	RET
 
-E4_Xaboia:
-	ACALL	GERTAERA_SORGAILU_4
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E4  SOAP            Pre-wash until the car is no longer detected -> water + soap OFF.
+;------------------------------------------------------------------------------
+
+E4_Soap:
+	ACALL	EVENT_GEN_4
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_4
-	JMP	@A + DPTR
-EKINTZAK_4:
-	AJMP	E4_EK0
-	AJMP	E4_EK1
-GERTAERA_SORGAILU_4:
-	JNB	S_CAR,Gertaera4_1
-;GERTAERA4_0:
-	MOV	GERTAERA,#0x00
+	MOV	DPTR,#ACTIONS_4
+	JMP	@A+DPTR
+ACTIONS_4:
+	AJMP	E4_ACT0
+	AJMP	E4_ACT1
+EVENT_GEN_4:
+	JNB	S_CAR,EVENT4_1
+;EVENT4_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA4_1:
-	MOV	GERTAERA,#0x01
-	RET
-
-E4_EK0:
+EVENT4_1:
+	MOV	EVENT,#0x01
 	RET
 
-E4_EK1:
-	CLR 	EV_URA
-	CLR	EV_XABOIA
-	ACALL	Timer_Hasieratu
-	MOV	EGOERA, #0x05	
+E4_ACT0:
 	RET
 
-;-----------------E5_Kokapen-------------------------
+E4_ACT1:
+	CLR	VALVE_WATER
+	CLR	VALVE_SOAP
+	ACALL	Timer_Start
+	MOV	STATE,#0x05
+	RET
 
-E5_Kokapen:
-	ACALL	GERTAERA_SORGAILU_5
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E5  POSITION        Bridge keeps moving 4 s -> stop, roller motor ON (PWM0), rollers IN.
+;------------------------------------------------------------------------------
+
+E5_Position:
+	ACALL	EVENT_GEN_5
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_5
-	JMP	@A + DPTR
-EKINTZAK_5:
-	AJMP	E5_EK0
-	AJMP	E5_EK1
+	MOV	DPTR,#ACTIONS_5
+	JMP	@A+DPTR
+ACTIONS_5:
+	AJMP	E5_ACT0
+	AJMP	E5_ACT1
 
-GERTAERA_SORGAILU_5:
-	JB	tick4s ,GERTAERA5_1
-;GERTAERA5_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_5:
+	JB	tick4s,EVENT5_1
+;EVENT5_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA5_1:
-	CLR	Tick4s
-	MOV	GERTAERA,#0x01
-	RET
-
-E5_EK0:
+EVENT5_1:
+	CLR	tick4s
+	MOV	EVENT,#0x01
 	RET
 
-E5_EK1:
-	ACALL	PWM0_Prog
-	CLR	BMOV_FRONT
-	SETB	IN
-	ACALL	Timer_Amatatu
-	MOV	EGOERA, #0x06	
+E5_ACT0:
 	RET
 
-;-----------------E6_Atzean_Garbitu-------------------------
+E5_ACT1:
+	ACALL	PWM0_On
+	CLR	BRIDGE_FWD
+	SETB	VR_IN
+	ACALL	Timer_Stop
+	MOV	STATE,#0x06
+	RET
 
-E6_Atzean_Garbitu:
-	ACALL	GERTAERA_SORGAILU_6
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E6  WASH_REAR       Vertical rollers close in until the centre limit switch.
+;------------------------------------------------------------------------------
+
+E6_Wash_Rear:
+	ACALL	EVENT_GEN_6
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_6
-	JMP	@A + DPTR
-EKINTZAK_6:
-	AJMP	E6_EK0
-	AJMP	E6_EK1
+	MOV	DPTR,#ACTIONS_6
+	JMP	@A+DPTR
+ACTIONS_6:
+	AJMP	E6_ACT0
+	AJMP	E6_ACT1
 
-GERTAERA_SORGAILU_6:
-	JB	FC_RV_CENTRO ,Gertaera6_1
-;GERTAERA6_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_6:
+	JB	LS_VR_CENTER,EVENT6_1
+;EVENT6_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA6_1:
-	MOV	GERTAERA,#0x01
-	RET
-
-E6_EK0:
+EVENT6_1:
+	MOV	EVENT,#0x01
 	RET
 
-E6_EK1:
-	CLR	IN
-	SETB	OUT
-	MOV	EGOERA, #0x07	
+E6_ACT0:
 	RET
 
-;-----------------E7_Arrabolak_Kokatu-------------------------
+E6_ACT1:
+	CLR	VR_IN
+	SETB	VR_OUT
+	MOV	STATE,#0x07
+	RET
 
-E7_Arrabolak_Kokatu:
-	ACALL	GERTAERA_SORGAILU_7
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E7  PLACE_ROLLERS   Rollers OUT to edge, bridge back until car -> rollers IN, H-roller DOWN.
+;------------------------------------------------------------------------------
+
+E7_Place_Rollers:
+	ACALL	EVENT_GEN_7
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_7
-	JMP	@A + DPTR
-EKINTZAK_7:
-	AJMP	E7_EK0
-	AJMP	E7_EK1
-	AJMP	E7_EK2
+	MOV	DPTR,#ACTIONS_7
+	JMP	@A+DPTR
+ACTIONS_7:
+	AJMP	E7_ACT0
+	AJMP	E7_ACT1
+	AJMP	E7_ACT2
 
-GERTAERA_SORGAILU_7:
-	JB	S_CAR,	Gertaera7_2
-	JB	FC_RV_BORDE ,KONPROBATU_FLAG
-GERTAERA7_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_7:
+	JB	S_CAR,EVENT7_2
+	JB	LS_VR_EDGE,Check_Flag
+EVENT7_0:
+	MOV	EVENT,#0x00
 	RET
-GERTAERA7_1:
-	MOV	GERTAERA,#0x01
+EVENT7_1:
+	MOV	EVENT,#0x01
 	RET
-GERTAERA7_2:
-	MOV	GERTAERA,#0x02
+EVENT7_2:
+	MOV	EVENT,#0x02
 	RET
-KONPROBATU_FLAG:
-	JB	FLAG0, Gertaera7_0
-	JMP	GERTAERA7_1
+Check_Flag:
+	JB	FLAG0,EVENT7_0
+	JMP	EVENT7_1
 
-E7_EK0:
+E7_ACT0:
 	RET
 
-E7_EK1:
-	CLR	OUT	
-	SETB	BMOV_BACK
+E7_ACT1:
+	CLR	VR_OUT
+	SETB	BRIDGE_BACK
 	SETB	FLAG0
 	RET
 
-E7_EK2:
-	SETB	IN
-	SETB	DOWN
-	CLR	BMOV_BACK	
-	MOV	EGOERA,#0x08
-	ACALL	timer_hasieratu
+E7_ACT2:
+	SETB	VR_IN
+	SETB	HR_DOWN
+	CLR	BRIDGE_BACK
+	MOV	STATE,#0x08
+	ACALL	Timer_Start
 	RET
 
-;-----------------E8_Hurbildu-------------------------
+;------------------------------------------------------------------------------
+; E8  APPROACH_ROLL.  Bring both rollers to ~40 cm of the car using ADC0 / ADC1.
+;------------------------------------------------------------------------------
 
-E8_Hurbildu:
-	ACALL	GERTAERA_SORGAILU_8
-	MOV	A, GERTAERA
+E8_Approach_Rollers:
+	ACALL	EVENT_GEN_8
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_8
-	JMP	@A + DPTR
-EKINTZAK_8:
-	AJMP	E8_EK0
-	AJMP	E8_EK1
-	AJMP	E8_EK2
-	AJMP	E8_EK3
-	AJMP	E8_EK4
-	AJMP	E8_EK5
-	AJMP	E8_EK6
+	MOV	DPTR,#ACTIONS_8
+	JMP	@A+DPTR
+ACTIONS_8:
+	AJMP	E8_ACT0
+	AJMP	E8_ACT1
+	AJMP	E8_ACT2
+	AJMP	E8_ACT3
+	AJMP	E8_ACT4
+	AJMP	E8_ACT5
+	AJMP	E8_ACT6
 
-GERTAERA_SORGAILU_8:
-	JB	tick100ms,GERTAERA8_1
-	JB	tick_adc0,GERTAERA8_2
-	JB	tick_adc1,GERTAERA8_3
-;GERTAERA8_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_8:
+	JB	tick100ms,EVENT8_TICK
+	JB	tick_adc0,EVENT8_ADC0
+	JB	tick_adc1,EVENT8_ADC1
+;EVENT8_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA8_1:
-	clr	tick100ms
-	JB	dist_egokia,H_ONDO
-	MOV	GERTAERA,#0x01		;ADC0 ESKATU
-	RET
-H_ONDO:
-	MOV	GERTAERA,#0x02		;H ONDO DAGO, ADC1_ESKATU
-	RET
-GERTAERA8_2:				;ADC0	KONP
-	clr	tick_adc0
-	MOV	A,ADCH
-	CLR	C
-	CJNE	A,#0x69,H_EZ
-H_BAI:					;ADC0 ONDO DAGO, KONP ADC1 ONDO DAGOEN JADA
-	SETB	dist_egokia
-	JB	alt_egokia,V_BAI_H_BAI
-	MOV	GERTAERA,#0x03		;V EZ DAGO ONDO, H BAI
-	RET
-V_BAI_H_BAI:				;BIAK ONDO
-	MOV	GERTAERA,#0x04
-	RET
-H_EZ:					;ADC0 TXARTO KONP ADC1 ONDO DAGOEN JADA
-	JC	H_BAI
-	JB	alt_egokia,V_BAI_H_EZ
-	MOV	GERTAERA,#0x02		;BIAK TXARTO	
-	RET
-V_BAI_H_EZ:
-	MOV	GERTAERA,#0x00		;V ONDO
-	RET
-GERTAERA8_3:				;V KONP
-	clr	tick_adc1
-	MOV	A,ADCH
-	CLR	C
-	CJNE	A,#0x69,V_EZ
-V_BAI:					; V ONDO
-	SETB	ALT_EGOKIA
-	JB	dist_egokia,H_BAI_V_BAI
-	MOV	GERTAERA,#0x05		; H TXARTO ORAINDIK
-	RET
-H_BAI_V_BAI:				;BIAK ONDO
-	MOV	GERTAERA,#0x06
-	RET
-V_EZ:
-	JC	V_BAI			;V TXARTO BERAZ, ITXARON TICK 100ms heltzeko
-	MOV	GERTAERA,#0x00
-	RET
-
-E8_EK0:
-	RET
-
-E8_EK1:
-	mov	kont50ms,#0x00
-	mov	A,#0x00
-	acall	adc_hasieratu
-	RET
-
-E8_EK2:
-	mov	A,#0x01
-	acall	adc_hasieratu
-	RET
-
-E8_EK3:
-	clr	in
-	mov	A,#0x01
-	acall	adc_hasieratu
-	RET
-
-E8_EK4:
-	clr	in
-	SETB	BMOV_BACK
-	mov	EGOERA,#0x09
-	RET
-
-E8_EK5:
-	clr	down
-	RET
-
-E8_EK6:
-	clr	down
-	SETB	BMOV_BACK
-	mov	EGOERA,#0x09
-	RET
-
-;------------------E9_Garbitu-----------------------------
-
-E9_Garbitu:
-	ACALL	GERTAERA_SORGAILU_9
-	MOV	A, GERTAERA
-	RL	A
-	MOV	DPTR, #EKINTZAK_9
-	JMP	@A + DPTR
-EKINTZAK_9:
-	AJMP	E9_EK0
-	AJMP	E9_EK1
-	AJMP	E9_EK2
-	AJMP	E9_EK3
-	AJMP	E9_EK4
-	AJMP	E9_EK5
-	AJMP	E9_EK6
-	AJMP	E9_EK7
-	AJMP	E9_EK8
-	AJMP	E9_EK9
-	AJMP	E9_EK10
-
-GERTAERA_SORGAILU_9:
-	JNB	S_CAR,GERTAERA9_4
-	JB	tick100ms,GERTAERA9_1
-	JB	tick_adc0,GERTAERA9_2
-	JB	tick_adc1,GERTAERA9_3
-;GERTAERA9_0:
-	MOV	GERTAERA,#0x00
-	RET
-GERTAERA9_1:
+EVENT8_TICK:
 	CLR	tick100ms
-	MOV	GERTAERA,#0x01
+	JB	dist_ok,H_Already_OK
+	MOV	EVENT,#0x01		;request ADC0
 	RET
-GERTAERA9_4:
-	MOV	GERTAERA,#0x09
+H_Already_OK:
+	MOV	EVENT,#0x02		;H is already OK, request ADC1
 	RET
-GERTAERA9_2:
-	JB	IN_PIZTU,in_piztuta_dago
-	JB	OUT_PIZTU,out_piztuta_dago
-	clr	tick_adc0
+EVENT8_ADC0:				;compare ADC0
+	CLR	tick_adc0
 	MOV	A,ADCH
 	CLR	C
-	CJNE	A,#0x4D,H_txikiago_30
-H_EZ_30:
-	CLR	C
-	CJNE	A,#0x80,H_handiago_50
-	AJMP	H_EZ_50
-H_txikiago_30:
-	JNC	H_EZ_30
-	SETB	OUT_PIZTU
-	MOV	GERTAERA,#0x02		
+	CJNE	A,#0x69,H_NOK
+H_OK:					;ADC0 OK, check whether ADC1 is already OK
+	SETB	dist_ok
+	JB	height_ok,V_OK_H_OK
+	MOV	EVENT,#0x03		;V not OK yet, H OK
 	RET
-H_handiago_50:
-	JC	H_EZ_50
-	SETB	IN_PIZTU
-	MOV	GERTAERA,#0x03
+V_OK_H_OK:				;both OK
+	MOV	EVENT,#0x04
 	RET
-H_EZ_50:
-	MOV	GERTAERA,#0x00
+H_NOK:					;ADC0 not OK, check whether ADC1 is already OK
+	JC	H_OK
+	JB	height_ok,V_OK_H_NOK
+	MOV	EVENT,#0x02		;both not OK
 	RET
-in_piztuta_dago:
-	clr	tick_adc0
-	mov	A,ADCH
-	clr	C
-	cjne	A,#66h,H_handiago40
-H_txikiago40:
-	clr	IN_PIZTU
-	mov	GERTAERA,#0x05
-	ret
-H_handiago40:
-	JC	H_txikiago40
-	MOV	GERTAERA,#0x00
-	ret
-out_piztuta_dago:
-	clr	tick_adc0
-	mov	A,ADCH
-	clr	C
-	cjne	A,#66h,H_txikiago40_2
-H_handiago40_2:
-	CLR	OUT_PIZTU
-	mov	GERTAERA,#0x04
-	ret
-H_txikiago40_2:
-	JNC	H_handiago40_2
-	MOV	GERTAERA,#0x00
-	ret
-GERTAERA9_3:
-	JB	UP_PIZTU,up_piztuta_dago	
-	JB	DOWN_PIZTU,down_piztuta_dago
-	clr	tick_adc1
+V_OK_H_NOK:
+	MOV	EVENT,#0x00		;V OK
+	RET
+EVENT8_ADC1:				;compare V (ADC1)
+	CLR	tick_adc1
 	MOV	A,ADCH
 	CLR	C
-	CJNE	A,#0x4D,V_txikiago_30
-V_EZ_30:
-	CLR	C
-	CJNE	A,#0x80,V_handiago_50
-	AJMP	V_EZ_50
-V_txikiago_30:
-	JNC	V_EZ_30
-	SETB	UP_PIZTU
-	MOV	GERTAERA,#0x06		
+	CJNE	A,#0x69,V_NOK
+V_OK:					;V OK
+	SETB	height_ok
+	JB	dist_ok,H_OK_V_OK
+	MOV	EVENT,#0x05		;H still not OK
 	RET
-V_handiago_50:
-	JC	V_EZ_50
-	SETB	DOWN_PIZTU
-	MOV	GERTAERA,#0x07
+H_OK_V_OK:				;both OK
+	MOV	EVENT,#0x06
 	RET
-V_EZ_50:
-	MOV	GERTAERA,#0x00
+V_NOK:
+	JC	V_OK			;V not OK, wait for the next 100 ms tick
+	MOV	EVENT,#0x00
 	RET
-up_piztuta_dago:
-	clr	tick_adc1
-	mov	A,ADCH
-	clr	C
-	cjne	A,#66h,V_txikiago40
-V_handiago40:
-	clr	UP_PIZTU
-	mov	GERTAERA,#0x0A
-	ret
-V_txikiago40:
-	JNC	V_handiago40
-	MOV	GERTAERA,#0x00
-	ret
-down_piztuta_dago:
-	clr	tick_adc1
-	mov	A,ADCH
-	clr	C
-	cjne	A,#66h,V_handiago40_2
-V_txikiago40_2:
-	clr	DOWN_PIZTU
-	mov	GERTAERA,#0x08
-	ret
-V_handiago40_2:
-	JC	V_txikiago40_2
-	MOV	GERTAERA,#0x00
-	ret
 
-E9_EK0:
-	ret
+E8_ACT0:
+	RET
 
-E9_EK1:
-	mov	kont50ms,#0x00
+E8_ACT1:
+	MOV	cnt50ms,#0x00
 	MOV	A,#0x00
-	ACALL	adc_hasieratu
-	ret
+	ACALL	ADC_Start
+	RET
 
-E9_EK2:
-	SETB	Out
+E8_ACT2:
 	MOV	A,#0x01
-	acall	adc_hasieratu
-	ret
+	ACALL	ADC_Start
+	RET
 
-E9_EK3:
-	SETB	IN
+E8_ACT3:
+	CLR	VR_IN
 	MOV	A,#0x01
-	acall	adc_hasieratu
-	ret
+	ACALL	ADC_Start
+	RET
 
-E9_EK4:
-	CLR	OUT
+E8_ACT4:
+	CLR	VR_IN
+	SETB	BRIDGE_BACK
+	MOV	STATE,#0x09
+	RET
+
+E8_ACT5:
+	CLR	HR_DOWN
+	RET
+
+E8_ACT6:
+	CLR	HR_DOWN
+	SETB	BRIDGE_BACK
+	MOV	STATE,#0x09
+	RET
+
+;------------------------------------------------------------------------------
+; E9  WASH            Closed-loop 30..50 cm distance tracking while the bridge moves back.
+;------------------------------------------------------------------------------
+
+E9_Wash:
+	ACALL	EVENT_GEN_9
+	MOV	A,EVENT
+	RL	A
+	MOV	DPTR,#ACTIONS_9
+	JMP	@A+DPTR
+ACTIONS_9:
+	AJMP	E9_ACT0
+	AJMP	E9_ACT1
+	AJMP	E9_ACT2
+	AJMP	E9_ACT3
+	AJMP	E9_ACT4
+	AJMP	E9_ACT5
+	AJMP	E9_ACT6
+	AJMP	E9_ACT7
+	AJMP	E9_ACT8
+	AJMP	E9_ACT9
+	AJMP	E9_ACT10
+
+EVENT_GEN_9:
+	JNB	S_CAR,EVENT9_9
+	JB	tick100ms,EVENT9_1
+	JB	tick_adc0,EVENT9_ADC0
+	JB	tick_adc1,EVENT9_ADC1
+;EVENT9_0:			;no event (default)
+	MOV	EVENT,#0x00
+	RET
+EVENT9_1:
+	CLR	tick100ms
+	MOV	EVENT,#0x01
+	RET
+EVENT9_9:
+	MOV	EVENT,#0x09
+	RET
+EVENT9_ADC0:
+	JB	VR_IN_ON,vr_in_is_on
+	JB	VR_OUT_ON,vr_out_is_on
+	CLR	tick_adc0
+	MOV	A,ADCH
+	CLR	C
+	CJNE	A,#0x4D,H_LT_30
+H_NOT_LT_30:
+	CLR	C
+	CJNE	A,#0x80,H_GT_50
+	AJMP	H_NOT_GT_50
+H_LT_30:
+	JNC	H_NOT_LT_30
+	SETB	VR_OUT_ON
+	MOV	EVENT,#0x02
+	RET
+H_GT_50:
+	JC	H_NOT_GT_50
+	SETB	VR_IN_ON
+	MOV	EVENT,#0x03
+	RET
+H_NOT_GT_50:
+	MOV	EVENT,#0x00
+	RET
+vr_in_is_on:
+	CLR	tick_adc0
+	MOV	A,ADCH
+	CLR	C
+	CJNE	A,#0x66,H_GT_40
+H_LT_40:
+	CLR	VR_IN_ON
+	MOV	EVENT,#0x05
+	RET
+H_GT_40:
+	JC	H_LT_40
+	MOV	EVENT,#0x00
+	RET
+vr_out_is_on:
+	CLR	tick_adc0
+	MOV	A,ADCH
+	CLR	C
+	CJNE	A,#0x66,H_LT_40_2
+H_GT_40_2:
+	CLR	VR_OUT_ON
+	MOV	EVENT,#0x04
+	RET
+H_LT_40_2:
+	JNC	H_GT_40_2
+	MOV	EVENT,#0x00
+	RET
+EVENT9_ADC1:
+	JB	HR_UP_ON,hr_up_is_on
+	JB	HR_DOWN_ON,hr_down_is_on
+	CLR	tick_adc1
+	MOV	A,ADCH
+	CLR	C
+	CJNE	A,#0x4D,V_LT_30
+V_NOT_LT_30:
+	CLR	C
+	CJNE	A,#0x80,V_GT_50
+	AJMP	V_NOT_GT_50
+V_LT_30:
+	JNC	V_NOT_LT_30
+	SETB	HR_UP_ON
+	MOV	EVENT,#0x06
+	RET
+V_GT_50:
+	JC	V_NOT_GT_50
+	SETB	HR_DOWN_ON
+	MOV	EVENT,#0x07
+	RET
+V_NOT_GT_50:
+	MOV	EVENT,#0x00
+	RET
+hr_up_is_on:
+	CLR	tick_adc1
+	MOV	A,ADCH
+	CLR	C
+	CJNE	A,#0x66,V_LT_40
+V_GT_40:
+	CLR	HR_UP_ON
+	MOV	EVENT,#0x0A
+	RET
+V_LT_40:
+	JNC	V_GT_40
+	MOV	EVENT,#0x00
+	RET
+hr_down_is_on:
+	CLR	tick_adc1
+	MOV	A,ADCH
+	CLR	C
+	CJNE	A,#0x66,V_GT_40_2
+V_LT_40_2:
+	CLR	HR_DOWN_ON
+	MOV	EVENT,#0x08
+	RET
+V_GT_40_2:
+	JC	V_LT_40_2
+	MOV	EVENT,#0x00
+	RET
+
+E9_ACT0:
+	RET
+
+E9_ACT1:
+	MOV	cnt50ms,#0x00
+	MOV	A,#0x00
+	ACALL	ADC_Start
+	RET
+
+E9_ACT2:
+	SETB	VR_OUT
 	MOV	A,#0x01
-	acall	adc_hasieratu
-	ret
+	ACALL	ADC_Start
+	RET
 
-E9_EK5:
-	CLR	IN
+E9_ACT3:
+	SETB	VR_IN
 	MOV	A,#0x01
-	acall	adc_hasieratu	
-	ret
+	ACALL	ADC_Start
+	RET
 
-E9_EK6:
-	SETB	UP
-	ret
+E9_ACT4:
+	CLR	VR_OUT
+	MOV	A,#0x01
+	ACALL	ADC_Start
+	RET
 
-E9_EK7:
-	SETB	DOWN
-	ret
+E9_ACT5:
+	CLR	VR_IN
+	MOV	A,#0x01
+	ACALL	ADC_Start
+	RET
 
-E9_EK8:
-	CLR	DOWN
-	ret
+E9_ACT6:
+	SETB	HR_UP
+	RET
 
-E9_EK9:
-	CLR	BMOV_BACK
-	CLR	IN
-	CLR	DOWN
-	CLR	OUT
-	SETB	UP
-	acall	timer_amatatu
-	MOV	EGOERA,#0x0A
-	ret
+E9_ACT7:
+	SETB	HR_DOWN
+	RET
 
-E9_EK10:
-	CLR	UP
-	ret
+E9_ACT8:
+	CLR	HR_DOWN
+	RET
 
-;-----------------E10_Hori_Kokatu-------------------------
+E9_ACT9:
+	CLR	BRIDGE_BACK
+	CLR	VR_IN
+	CLR	HR_DOWN
+	CLR	VR_OUT
+	SETB	HR_UP
+	ACALL	Timer_Stop
+	MOV	STATE,#0x0A
+	RET
 
-E10_Hori_kokatu:
-	ACALL	GERTAERA_SORGAILU_10
-	MOV	A, GERTAERA
+E9_ACT10:
+	CLR	HR_UP
+	RET
+
+;------------------------------------------------------------------------------
+; E10 RAISE_HROLLER   Raise the horizontal roller until its top limit switch.
+;------------------------------------------------------------------------------
+
+E10_Raise_HRoller:
+	ACALL	EVENT_GEN_10
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_10
-	JMP	@A + DPTR
-EKINTZAK_10:
-	AJMP	E10_EK0
-	AJMP	E10_EK1
+	MOV	DPTR,#ACTIONS_10
+	JMP	@A+DPTR
+ACTIONS_10:
+	AJMP	E10_ACT0
+	AJMP	E10_ACT1
 
-GERTAERA_SORGAILU_10:
-	JB	FC_RH_TOP,Gertaera10_1
-;GERTAERA10_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_10:
+	JB	LS_HR_TOP,EVENT10_1
+;EVENT10_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA10_1:
-	MOV	GERTAERA,#0x01
-	RET
-
-E10_EK0:
+EVENT10_1:
+	MOV	EVENT,#0x01
 	RET
 
-E10_EK1:
-	SETB	BMOV_BACK
-	CLR	UP
-	ACALL	Timer_Hasieratu
-	MOV	EGOERA, #0Bh	
+E10_ACT0:
 	RET
 
-;-----------------E11_Kokapen-------------------------
+E10_ACT1:
+	SETB	BRIDGE_BACK
+	CLR	HR_UP
+	ACALL	Timer_Start
+	MOV	STATE,#0x0B
+	RET
 
-E11_Kokapen:
-	ACALL	GERTAERA_SORGAILU_11
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E11 POSITION        Bridge moves back 4 s -> stop, vertical rollers IN.
+;------------------------------------------------------------------------------
+
+E11_Position:
+	ACALL	EVENT_GEN_11
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_11
-	JMP	@A + DPTR
-EKINTZAK_11:
-	AJMP	E11_EK0
-	AJMP	E11_EK1
+	MOV	DPTR,#ACTIONS_11
+	JMP	@A+DPTR
+ACTIONS_11:
+	AJMP	E11_ACT0
+	AJMP	E11_ACT1
 
-GERTAERA_SORGAILU_11:
-	JB	tick4s ,Gertaera11_1
-;GERTAERA11_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_11:
+	JB	tick4s,EVENT11_1
+;EVENT11_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA11_1:
-	MOV	GERTAERA,#0x01
-	RET
-
-E11_EK0:
+EVENT11_1:
+	MOV	EVENT,#0x01
 	RET
 
-E11_EK1:
-	CLR	BMOV_BACK
-	SETB	IN
-	ACALL	Timer_Amatatu
-	MOV	EGOERA, #0Ch	
+E11_ACT0:
 	RET
 
-;-----------------E12_Aurrean_Garbitu-------------------------
+E11_ACT1:
+	CLR	BRIDGE_BACK
+	SETB	VR_IN
+	ACALL	Timer_Stop
+	MOV	STATE,#0x0C
+	RET
 
-E12_Aurrean_Garbitu:
-	ACALL	GERTAERA_SORGAILU_12
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E12 WASH_FRONT      Vertical rollers close in until the centre limit switch.
+;------------------------------------------------------------------------------
+
+E12_Wash_Front:
+	ACALL	EVENT_GEN_12
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_12
-	JMP	@A + DPTR
-EKINTZAK_12:
-	AJMP	E12_EK0
-	AJMP	E12_EK1
+	MOV	DPTR,#ACTIONS_12
+	JMP	@A+DPTR
+ACTIONS_12:
+	AJMP	E12_ACT0
+	AJMP	E12_ACT1
 
-GERTAERA_SORGAILU_12:
-	JB	FC_RV_CENTRO ,Gertaera12_1
-;GERTAERA12_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_12:
+	JB	LS_VR_CENTER,EVENT12_1
+;EVENT12_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA12_1:
-	MOV	GERTAERA,#0x01
-	RET
-
-E12_EK0:
+EVENT12_1:
+	MOV	EVENT,#0x01
 	RET
 
-E12_EK1:
-	CLR	IN
-	SETB	OUT
-	MOV	EGOERA, #0Dh	
+E12_ACT0:
 	RET
 
-;-----------------E13_Arrabolak_Kokatu-------------------------
+E12_ACT1:
+	CLR	VR_IN
+	SETB	VR_OUT
+	MOV	STATE,#0x0D
+	RET
 
-E13_Arrabolak_Kokatu:
-	ACALL	GERTAERA_SORGAILU_13
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E13 PLACE_ROLLERS   Rollers OUT to edge -> bridge forward, roller motor OFF.
+;------------------------------------------------------------------------------
+
+E13_Place_Rollers:
+	ACALL	EVENT_GEN_13
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_13
-	JMP	@A + DPTR
-EKINTZAK_13:
-	AJMP	E13_EK0
-	AJMP	E13_EK1
+	MOV	DPTR,#ACTIONS_13
+	JMP	@A+DPTR
+ACTIONS_13:
+	AJMP	E13_ACT0
+	AJMP	E13_ACT1
 
-GERTAERA_SORGAILU_13:
-	JB	FC_RV_BORDE ,Gertaera13_1
-;GERTAERA13_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_13:
+	JB	LS_VR_EDGE,EVENT13_1
+;EVENT13_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA13_1:
-	MOV	GERTAERA,#0x01
-	RET
-
-E13_EK0:
+EVENT13_1:
+	MOV	EVENT,#0x01
 	RET
 
-E13_EK1:
-	SETB	BMOV_FRONT
-	ACALL	PWM0_ITZALI
-	MOV	EGOERA, #0Eh	
+E13_ACT0:
 	RET
 
-;-----------------E14_Kokatu-------------------------
+E13_ACT1:
+	SETB	BRIDGE_FWD
+	ACALL	PWM0_Off
+	MOV	STATE,#0x0E
+	RET
 
-E14_Kokatu:
-	ACALL	GERTAERA_SORGAILU_14
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E14 POSITION_RINSE  Bridge forward until the car is detected -> water ON.
+;------------------------------------------------------------------------------
+
+E14_Position_Rinse:
+	ACALL	EVENT_GEN_14
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_14
-	JMP	@A + DPTR
-EKINTZAK_14:
-	AJMP	E14_EK0
-	AJMP	E14_EK1
+	MOV	DPTR,#ACTIONS_14
+	JMP	@A+DPTR
+ACTIONS_14:
+	AJMP	E14_ACT0
+	AJMP	E14_ACT1
 
-GERTAERA_SORGAILU_14:
-	JB	S_CAR ,Gertaera14_1
-;GERTAERA14_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_14:
+	JB	S_CAR,EVENT14_1
+;EVENT14_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA14_1:
-	MOV	GERTAERA,#0x01
-	RET
-
-E14_EK0:
+EVENT14_1:
+	MOV	EVENT,#0x01
 	RET
 
-E14_EK1:
-	SETB	EV_URA
-	MOV	EGOERA, #0Fh	
+E14_ACT0:
 	RET
 
-;-----------------E15_Ureztatu-------------------------
+E14_ACT1:
+	SETB	VALVE_WATER
+	MOV	STATE,#0x0F
+	RET
 
-E15_Ureztatu:
-	ACALL	GERTAERA_SORGAILU_15
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E15 RINSE           Rinse until the car is no longer detected -> water OFF.
+;------------------------------------------------------------------------------
+
+E15_Rinse:
+	ACALL	EVENT_GEN_15
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_15
-	JMP	@A + DPTR
-EKINTZAK_15:
-	AJMP	E15_EK0
-	AJMP	E15_EK1
+	MOV	DPTR,#ACTIONS_15
+	JMP	@A+DPTR
+ACTIONS_15:
+	AJMP	E15_ACT0
+	AJMP	E15_ACT1
 
-GERTAERA_SORGAILU_15:
-	JNB	S_CAR ,Gertaera15_1
-;GERTAERA15_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_15:
+	JNB	S_CAR,EVENT15_1
+;EVENT15_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA15_1:
-	MOV	GERTAERA,#0x01
-	RET
-
-E15_EK0:
+EVENT15_1:
+	MOV	EVENT,#0x01
 	RET
 
-E15_EK1:
-	CLR	EV_URA
-	ACALL	Timer_Hasieratu
-	MOV	EGOERA, #10h	
+E15_ACT0:
 	RET
 
-;-----------------E16_KOKATU40cm-------------------------
+E15_ACT1:
+	CLR	VALVE_WATER
+	ACALL	Timer_Start
+	MOV	STATE,#0x10
+	RET
 
-E16_KOKATU40CM:
-	ACALL	GERTAERA_SORGAILU_16
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E16 POSITION_40CM   Bridge keeps moving 4 s -> reverse direction.
+;------------------------------------------------------------------------------
+
+E16_Position_40cm:
+	ACALL	EVENT_GEN_16
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_16
-	JMP	@A + DPTR
-EKINTZAK_16:
-	AJMP	E16_EK0
-	AJMP	E16_EK1
+	MOV	DPTR,#ACTIONS_16
+	JMP	@A+DPTR
+ACTIONS_16:
+	AJMP	E16_ACT0
+	AJMP	E16_ACT1
 
-GERTAERA_SORGAILU_16:
-	JB	tick4s ,Gertaera16_1
-;GERTAERA16_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_16:
+	JB	tick4s,EVENT16_1
+;EVENT16_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA16_1:
-	CLR	Tick4s
-	MOV	GERTAERA,#0x01
-	RET
-
-E16_EK0:
+EVENT16_1:
+	CLR	tick4s
+	MOV	EVENT,#0x01
 	RET
 
-E16_EK1:
-	CLR	BMOV_FRONT
-	SETB	BMOV_BACK
-	ACALL	Timer_amatatu
-	MOV	EGOERA, #11h	
+E16_ACT0:
 	RET
 
-;-----------------E17_Kotxera_Hurbildu-------------------------
+E16_ACT1:
+	CLR	BRIDGE_FWD
+	SETB	BRIDGE_BACK
+	ACALL	Timer_Stop
+	MOV	STATE,#0x11
+	RET
 
-E17_Kotxera_Hurbildu:
-	ACALL	GERTAERA_SORGAILU_17
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E17 APPROACH_CAR    Bridge back until the car is detected -> dryer ON (PWM1).
+;------------------------------------------------------------------------------
+
+E17_Approach_Car:
+	ACALL	EVENT_GEN_17
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_17
-	JMP	@A + DPTR
-EKINTZAK_17:
-	AJMP	E17_EK0
-	AJMP	E17_EK1
+	MOV	DPTR,#ACTIONS_17
+	JMP	@A+DPTR
+ACTIONS_17:
+	AJMP	E17_ACT0
+	AJMP	E17_ACT1
 
-GERTAERA_SORGAILU_17:
-	JB	S_CAR ,Gertaera17_1
-;GERTAERA17_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_17:
+	JB	S_CAR,EVENT17_1
+;EVENT17_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA17_1:
-	MOV	GERTAERA,#0x01
-	RET
-
-E17_EK0:
+EVENT17_1:
+	MOV	EVENT,#0x01
 	RET
 
-E17_EK1:
-	ACALL	PWM1_Prog
-	MOV	EGOERA, #12h	
+E17_ACT0:
 	RET
 
-;-----------------E18_Aireztatu-------------------------
+E17_ACT1:
+	ACALL	PWM1_On
+	MOV	STATE,#0x12
+	RET
 
-E18_Aireztatu:
-	ACALL	GERTAERA_SORGAILU_18
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E18 DRY             Dry until the car is no longer detected -> dryer OFF.
+;------------------------------------------------------------------------------
+
+E18_Dry:
+	ACALL	EVENT_GEN_18
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_18
-	JMP	@A + DPTR
-EKINTZAK_18:
-	AJMP	E18_EK0
-	AJMP	E18_EK1
+	MOV	DPTR,#ACTIONS_18
+	JMP	@A+DPTR
+ACTIONS_18:
+	AJMP	E18_ACT0
+	AJMP	E18_ACT1
 
-GERTAERA_SORGAILU_18:
-	JNB	S_CAR ,Gertaera18_1
-;GERTAERA18_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_18:
+	JNB	S_CAR,EVENT18_1
+;EVENT18_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA18_1:
-	MOV	GERTAERA,#0x01
-	RET
-
-E18_EK0:
+EVENT18_1:
+	MOV	EVENT,#0x01
 	RET
 
-E18_EK1:
-	ACALL	PWM1_ITZALI
-	MOV	EGOERA, #13h	
+E18_ACT0:
 	RET
 
-;-----------------E19_Kokatu_Hasieran----------------------
+E18_ACT1:
+	ACALL	PWM1_Off
+	MOV	STATE,#0x13
+	RET
 
-E19_Kokatu_Hasieran:
-	ACALL	GERTAERA_SORGAILU_19
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E19 RETURN_HOME     Bridge back to home sensor -> stop, LEDs off, green light.
+;------------------------------------------------------------------------------
+
+E19_Return_Home:
+	ACALL	EVENT_GEN_19
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_19
-	JMP	@A + DPTR
-EKINTZAK_19:
-	AJMP	E19_EK0
-	AJMP	E19_EK1
+	MOV	DPTR,#ACTIONS_19
+	JMP	@A+DPTR
+ACTIONS_19:
+	AJMP	E19_ACT0
+	AJMP	E19_ACT1
 
-GERTAERA_SORGAILU_19:
-JB	BPOS_START ,Gertaera19_1
-;GERTAERA19_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_19:
+	JB	S_BRIDGE_HOME,EVENT19_1
+;EVENT19_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA19_1:
-	MOV	GERTAERA,#0x01
-	RET
-
-E19_EK0:
+EVENT19_1:
+	MOV	EVENT,#0x01
 	RET
 
-E19_EK1:
-	ACALL	Timer_Hasieratu
-	CLR	BMOV_BACK
-	CLR	LED_LINT
-	CLR	LED_LNOR
-	CLR	SEM_GORRIA
-	SETB	SEM_BERDEA
-	MOV	EGOERA, #14h	
+E19_ACT0:
 	RET
 
-;-----------------E20_Keinuka-------------------------
+E19_ACT1:
+	ACALL	Timer_Start
+	CLR	BRIDGE_BACK
+	CLR	LED_INTENSE
+	CLR	LED_NORMAL
+	CLR	LIGHT_RED
+	SETB	LIGHT_GREEN
+	MOV	STATE,#0x14
+	RET
 
-E20_Keinuka:
-	ACALL	GERTAERA_SORGAILU_20
-	MOV	A, GERTAERA
+;------------------------------------------------------------------------------
+; E20 BLINK           Green light blinks every 1 s until the car leaves -> E0.
+;------------------------------------------------------------------------------
+
+E20_Blink:
+	ACALL	EVENT_GEN_20
+	MOV	A,EVENT
 	RL	A
-	MOV	DPTR, #EKINTZAK_20
-	JMP	@A + DPTR
-EKINTZAK_20:
-	AJMP	E20_EK0
-	AJMP	E20_EK1
-	AJMP	E20_EK2
+	MOV	DPTR,#ACTIONS_20
+	JMP	@A+DPTR
+ACTIONS_20:
+	AJMP	E20_ACT0
+	AJMP	E20_ACT1
+	AJMP	E20_ACT2
 
-GERTAERA_SORGAILU_20:
-	JB	tick1s ,Gertaera20_1
-	JNB	S_PLAT, Gertaera20_2
-;GERTAERA20_0:
-	MOV	GERTAERA,#0x00
+EVENT_GEN_20:
+	JB	tick1s,EVENT20_1
+	JNB	S_PLATFORM,EVENT20_2
+;EVENT20_0:			;no event (default)
+	MOV	EVENT,#0x00
 	RET
-GERTAERA20_1:
-	CLR	Tick1s
-	MOV	GERTAERA,#0x01
+EVENT20_1:
+	CLR	tick1s
+	MOV	EVENT,#0x01
 	RET
-GERTAERA20_2:
-	MOV	GERTAERA,#0x02
-	RET
-
-E20_EK0:
+EVENT20_2:
+	MOV	EVENT,#0x02
 	RET
 
-E20_EK1:
-	ACALL	TIMER_BIRHASIERATU
-	CPL 	SEM_BERDEA
-   	RET
+E20_ACT0:
+	RET
 
-E20_EK2:
-	SETB	SEM_BERDEA
-	CLR	SEM_GORRIA
-	ACALL	Timer_Amatatu
-	MOV	EGOERA, #0x00
+E20_ACT1:
+	ACALL	Timer_Restart
+	CPL	LIGHT_GREEN
+	RET
 
-;--------------------------TIMER HASIERATU----------------------
+E20_ACT2:
+	SETB	LIGHT_GREEN
+	CLR	LIGHT_RED
+	ACALL	Timer_Stop
+	MOV	STATE,#0x00
+				;(no RET here: execution continues into Timer_Start)
 
-TIMER_HASIERATU:		
+;------------------------------------------------------------------------------
+; TIMER 0 HELPERS: start / stop / restart
+;------------------------------------------------------------------------------
+
+Timer_Start:
 	MOV	TL0,#0xB0
 	MOV	TH0,#0x3C
-	orl	IEN0,#0x82
-	setb	TR0
+	ORL	IEN0,#0x82
+	SETB	TR0
 	RET
 
-;TIMER itzali--------------------------------------
+;------------------------------------------------------------------------------
+; Timer_Stop (stop Timer 0) / Timer_Restart (keep running): clear counters and ticks
+;------------------------------------------------------------------------------
 
-Timer_amatatu:
-	CLR 	TR0		
-	MOV	kont50ms,#0x00
-	MOV	kont1s,#0x00
-	CLR	tick100ms	
-	CLR	tick1s		
-	CLR	tick30s		
+Timer_Stop:
+	CLR	TR0
+	MOV	cnt50ms,#0x00
+	MOV	cnt1s,#0x00
+	CLR	tick100ms
+	CLR	tick1s
+	CLR	tick30s
 	CLR	tick60s
 	CLR	tick4s
 	RET
 
-Timer_BirHasieratu:
+Timer_Restart:
 	MOV	TL0,#0xB0
 	MOV	TH0,#0x3C
-	orl	IEN0,#0x82
-	MOV	kont50ms,#0x00
-	MOV	kont1s,#0x00
-	CLR	tick100ms	
-	CLR	tick1s		
-	CLR	tick30s		
+	ORL	IEN0,#0x82
+	MOV	cnt50ms,#0x00
+	MOV	cnt1s,#0x00
+	CLR	tick100ms
+	CLR	tick1s
+	CLR	tick30s
 	CLR	tick60s
 	CLR	tick4s
 	RET
 
-;----------------------------TIMER_KONT_ETA_FLAG-------------------------------
+;------------------------------------------------------------------------------
+; TIMER COUNTERS AND TICK FLAGS (called from the Timer 0 ISR)
+;------------------------------------------------------------------------------
 
-UNITATE_BIHURKETA:
+Unit_Conversion:
 	MOV	A,0x14
-	CJNE	A,kont50ms,amaitu_UB
-	inc	kont1s
-	mov	kont50ms,#0x00
-amaitu_UB:
+	CJNE	A,cnt50ms,end_UC
+	INC	cnt1s
+	MOV	cnt50ms,#0x00
+end_UC:
 	RET
 
-FLAG_KONP:
-	MOV 	A,#0x02
+Flag_Compare:
+	MOV	A,#0x02
 	CLR	C
-	CJNE	A,kont50ms,amaitu100ms
+	CJNE	A,cnt50ms,end100ms
 	SETB	tick100ms
-amaitu100ms:
-	JNC	BUKAERA		
-	MOV 	A,#0x01		;konp_1s:
+end100ms:
+	JNC	Flags_Done
+	MOV	A,#0x01			;compare_1s:
 	CLR	C
-	CJNE	A,kont1s,amaitu1s
+	CJNE	A,cnt1s,end1s
 	SETB	tick1s
-amaitu1s:
-	JNC	BUKAERA		
-	MOV 	A,#0x04		;konp_4s:
+end1s:
+	JNC	Flags_Done
+	MOV	A,#0x04			;compare_4s:
 	CLR	C
-	CJNE	A,kont1s,amaitu4s
+	CJNE	A,cnt1s,end4s
 	SETB	tick4s
-amaitu4s:
-	JNC	BUKAERA
-	MOV 	A,#0x1E		;konp_30s:
+end4s:
+	JNC	Flags_Done
+	MOV	A,#0x1E			;compare_30s:
 	CLR	C
-	CJNE	A,kont1s,amaitu30s
+	CJNE	A,cnt1s,end30s
 	SETB	tick30s
-amaitu30s:
-	JNC	BUKAERA
-	MOV 	A,#0x3C		;konp_60s:
+end30s:
+	JNC	Flags_Done
+	MOV	A,#0x3C			;compare_60s:
 	CLR	C
-	CJNE	A,kont1s,amaitu60s
+	CJNE	A,cnt1s,end60s
 	SETB	tick60s
-amaitu60s:
-	JNC	BUKAERA
-BUKAERA:
+end60s:
+	JNC	Flags_Done
+Flags_Done:
 	RET
 
-;--------------------------ADC_HASIERATU-------------------------------
+;------------------------------------------------------------------------------
+; ADC_Start: start a conversion on the channel given in A
+;------------------------------------------------------------------------------
 
-ADC_HASIERATU:
+ADC_Start:
 ;	CLR	tick_adc0
 ;	CLR	tick_adc1
 	ANL	ADCON,#0xC8
@@ -1219,33 +1304,35 @@ ADC_HASIERATU:
 	ORL	ADCON,#0x08
 	RET
 
-;-----------------------AZPIERRUTINAK-------------------------------
-			;AKTIBATU----
+;------------------------------------------------------------------------------
+; SUBROUTINES: PWM control
+;------------------------------------------------------------------------------
+			;--- enable ---
 
-PWM0_Prog:
-	JB	Ficha_Tipo,PWM0_INT
+PWM0_On:
+	JB	TOKEN_TYPE,PWM0_Intense
 	MOV	PWM0,#0x80
-	ret
-PWM0_INT:	
+	RET
+PWM0_Intense:
 	MOV	PWM0,#0x80
-	ret
+	RET
 
-PWM1_Prog:
-	JB	Ficha_Tipo,PWM1_INT
+PWM1_On:
+	JB	TOKEN_TYPE,PWM1_Intense
 	MOV	PWM1,#0x26
-	ret
-PWM1_INT:
+	RET
+PWM1_Intense:
 	MOV	PWM1,#0x00
-	ret
+	RET
 
-			;ITZALI----
+			;--- disable ---
 
-PWM0_ITZALI:
-	MOV 	PWM0, #0xff
-	ret
+PWM0_Off:
+	MOV	PWM0,#0xFF
+	RET
 
-PWM1_ITZALI:
-	MOV	PWM1, #0xff
-	ret
-	
+PWM1_Off:
+	MOV	PWM1,#0xFF
+	RET
+
 END

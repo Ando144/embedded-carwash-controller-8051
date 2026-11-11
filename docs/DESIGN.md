@@ -37,59 +37,26 @@ version 1.1.
 
 ## 2. State machine
 
-21 states (E0–E20). Each arrow is labelled with the **event** that triggers it and, after the
-`/`, the main **actions**. Events that run an action without changing state (alarms, LEDs, closed-loop
-corrections) are listed in the tables in section 3.
+21 states (E0–E20). The diagram shows **every event of every state**, as in the original
+hand-drawn diagram:
 
-```mermaid
-stateDiagram-v2
-    direction TB
-    [*] --> E0
-    E0: E0 Idle
-    E1: E1 Wait token
-    E2: E2 Wait start
-    E3: E3 Approach
-    E4: E4 Soap
-    E5: E5 Position
-    E6: E6 Wash rear
-    E7: E7 Place rollers
-    E8: E8 Approach rollers
-    E9: E9 Wash
-    E10: E10 Raise H-roller
-    E11: E11 Position
-    E12: E12 Wash front
-    E13: E13 Place rollers
-    E14: E14 Position for rinse
-    E15: E15 Rinse
-    E16: E16 Position 40 cm
-    E17: E17 Approach car
-    E18: E18 Dry
-    E19: E19 Return home
-    E20: E20 Blink
+- **blue arrows**: the event changes the state (label: `event / actions`)
+- **grey loops**: the event is handled without leaving the state (alarm, program LEDs, ADC
+  readings, closed-loop corrections, blinking)
+- **dashed arrows**: return to E0 (the car leaves without a token, or the cycle ends)
 
-    E0 --> E1: S_PLATFORM=1 / red light, timer on
-    E1 --> E0: S_PLATFORM=0 / green light, timer off
-    E1 --> E2: S_TOKEN=1
-    E2 --> E3: BTN_START or tick60s / bridge forward
-    E3 --> E4: S_CAR=1 / water + soap on
-    E4 --> E5: S_CAR=0 / water + soap off, timer on
-    E5 --> E6: tick4s / stop bridge, PWM0 on, rollers in
-    E6 --> E7: LS_VR_CENTER=1 / rollers out
-    E7 --> E8: S_CAR=1 / rollers in, H-roller down
-    E8 --> E9: H and V at 40 cm / bridge back
-    E9 --> E10: S_CAR=0 / stop all, H-roller up
-    E10 --> E11: LS_HR_TOP=1 / bridge back, timer on
-    E11 --> E12: tick4s / stop bridge, rollers in
-    E12 --> E13: LS_VR_CENTER=1 / rollers out
-    E13 --> E14: LS_VR_EDGE=1 / bridge forward, PWM0 off
-    E14 --> E15: S_CAR=1 / water on
-    E15 --> E16: S_CAR=0 / water off, timer on
-    E16 --> E17: tick4s / bridge back
-    E17 --> E18: S_CAR=1 / PWM1 (dryer) on
-    E18 --> E19: S_CAR=0 / PWM1 off
-    E19 --> E20: S_BRIDGE_HOME=1 / stop bridge, LEDs off, green light
-    E20 --> E0: S_PLATFORM=0 / green light, timer off
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="img/state_machine_dark.svg">
+  <img alt="State diagram of the 21-state machine, E0 to E20, with all transitions and in-state events" src="img/state_machine.svg">
+</picture>
+
+The process itself is sequential, because a car wash always runs the same steps in the same
+order. The decisions happen *inside* the states: E1 and E2 react to the platform, token,
+button and timeouts, and E8 and E9 run the closed-loop control on the two ADC readings. The
+tables in section 3 list every event with its priority.
+
+The diagram is generated from [`tools/make_state_diagram.py`](../tools/make_state_diagram.py)
+(Graphviz).
 
 The original hand-drawn diagram (Basque) is in
 [`original-basque/State_Diagram_Basque.pdf`](original-basque/State_Diagram_Basque.pdf).

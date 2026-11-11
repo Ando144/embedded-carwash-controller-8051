@@ -1,0 +1,66 @@
+digraph fsm {
+  graph [rankdir=TB, bgcolor="#fcfcfb", fontname="Helvetica", fontsize=11, nodesep=1.6, ranksep=0.75, newrank=true, pad=0.3, fontcolor="#52514e"];
+  node [shape=box, style="rounded,filled", fillcolor="#ffffff", color="#c3c2b7", fontname="Helvetica", fontsize=11, fontcolor="#0b0b0b", penwidth=1.2, margin="0.14,0.06"];
+  edge [fontname="Helvetica", fontsize=8.5, fontcolor="#52514e", color="#2a78d6", penwidth=1.6, arrowsize=0.7];
+  start [shape=circle, label="", width=0.16, style=filled, fillcolor="#0b0b0b", color="#0b0b0b"];
+  E0 [label=<<b>E0</b>  Idle<br/><font point-size="8" color="#898781">customer</font>>];
+  E1 [label=<<b>E1</b>  Wait token<br/><font point-size="8" color="#898781">customer</font>>];
+  E2 [label=<<b>E2</b>  Wait start<br/><font point-size="8" color="#898781">customer</font>>];
+  E3 [label=<<b>E3</b>  Approach<br/><font point-size="8" color="#898781">pre-wash</font>>];
+  E4 [label=<<b>E4</b>  Soap<br/><font point-size="8" color="#898781">pre-wash</font>>];
+  E5 [label=<<b>E5</b>  Position<br/><font point-size="8" color="#898781">brushing</font>>];
+  E6 [label=<<b>E6</b>  Wash rear<br/><font point-size="8" color="#898781">brushing</font>>];
+  E7 [label=<<b>E7</b>  Place rollers<br/><font point-size="8" color="#898781">brushing</font>>];
+  E8 [label=<<b>E8</b>  Approach rollers<br/><font point-size="8" color="#898781">brushing</font>>];
+  E9 [label=<<b>E9</b>  Wash<br/><font point-size="8" color="#898781">brushing</font>>];
+  E10 [label=<<b>E10</b>  Raise H-roller<br/><font point-size="8" color="#898781">brushing</font>>];
+  E11 [label=<<b>E11</b>  Position<br/><font point-size="8" color="#898781">brushing</font>>];
+  E12 [label=<<b>E12</b>  Wash front<br/><font point-size="8" color="#898781">brushing</font>>];
+  E13 [label=<<b>E13</b>  Place rollers<br/><font point-size="8" color="#898781">brushing</font>>];
+  E14 [label=<<b>E14</b>  Position for rinse<br/><font point-size="8" color="#898781">rinse</font>>];
+  E15 [label=<<b>E15</b>  Rinse<br/><font point-size="8" color="#898781">rinse</font>>];
+  E16 [label=<<b>E16</b>  Position 40 cm<br/><font point-size="8" color="#898781">rinse</font>>];
+  E17 [label=<<b>E17</b>  Approach car<br/><font point-size="8" color="#898781">drying</font>>];
+  E18 [label=<<b>E18</b>  Dry<br/><font point-size="8" color="#898781">drying</font>>];
+  E19 [label=<<b>E19</b>  Return home<br/><font point-size="8" color="#898781">finish</font>>];
+  E20 [label=<<b>E20</b>  Blink<br/><font point-size="8" color="#898781">finish</font>>];
+  E0 -> E1 -> E2 -> E3 -> E4 -> E5 -> E6 [style=invis, weight=20];
+  E13 -> E12 -> E11 -> E10 -> E9 -> E8 -> E7 [style=invis, weight=20];
+  E14 -> E15 -> E16 -> E17 -> E18 -> E19 -> E20 [style=invis, weight=20];
+  { rank=same; E0; E13; E14; }
+  { rank=same; E1; E12; E15; }
+  { rank=same; E2; E11; E16; }
+  { rank=same; E3; E10; E17; }
+  { rank=same; E4; E9; E18; }
+  { rank=same; E5; E8; E19; }
+  { rank=same; E6; E7; E20; }
+  start -> E0 [color="#0b0b0b"];
+  E0 -> E1 [label="S_PLATFORM=1\n/ red light, timer on", constraint=false];
+  E1 -> E0 [label="S_PLATFORM=0\n/ green light, timer off", style=dashed, constraint=false];
+  E1 -> E2 [label="S_TOKEN=1\n/ alarm off, restart counters", constraint=false];
+  E2 -> E3 [label="BTN_START || tick60s\n/ bridge forward, timer off", constraint=false];
+  E3 -> E4 [label="S_CAR=1\n/ water + soap on", constraint=false];
+  E4 -> E5 [label="S_CAR=0\n/ water + soap off, timer on", constraint=false];
+  E5 -> E6 [label="tick4s\n/ stop bridge, PWM0 on,\nrollers in, timer off", constraint=false];
+  E6 -> E7 [label="LS_VR_CENTER=1\n/ rollers out", constraint=false];
+  E7 -> E8 [label="S_CAR=1\n/ rollers in, H-roller down,\nclear flags, timer on", constraint=false];
+  E8 -> E9 [label="H and V ok\n/ stop roller, bridge back", constraint=false];
+  E9 -> E10 [label="S_CAR=0\n/ stop all, H-roller up,\ntimer off", constraint=false];
+  E10 -> E11 [label="LS_HR_TOP=1\n/ bridge back, timer on", constraint=false];
+  E11 -> E12 [label="tick4s\n/ stop bridge, rollers in,\ntimer off", constraint=false];
+  E12 -> E13 [label="LS_VR_CENTER=1\n/ rollers out", constraint=false];
+  E13 -> E14 [label="LS_VR_EDGE=1\n/ stop rollers, bridge\nforward, PWM0 off", constraint=false];
+  E14 -> E15 [label="S_CAR=1\n/ water on", constraint=false];
+  E15 -> E16 [label="S_CAR=0\n/ water off, timer on", constraint=false];
+  E16 -> E17 [label="tick4s\n/ bridge back, timer off", constraint=false];
+  E17 -> E18 [label="S_CAR=1\n/ PWM1 (dryer) on", constraint=false];
+  E18 -> E19 [label="S_CAR=0\n/ PWM1 off", constraint=false];
+  E19 -> E20 [label="S_BRIDGE_HOME=1\n/ stop bridge, LEDs off,\ngreen light, timer on", constraint=false];
+  E20 -> E0 [label="S_PLATFORM=0\n/ green light, timer off", style=dashed, constraint=false];
+  E1 -> E1 [label="tick30s / ALARM_START=1\l", color="#898781", fontcolor="#898781", penwidth=1.2, dir=forward];
+  E2 -> E2 [label="tick30s / ALARM_START=1\lTOKEN_TYPE=0 / LED_NORMAL=1\lTOKEN_TYPE=1 / LED_INTENSE=1\l", color="#898781", fontcolor="#898781", penwidth=1.2, dir=forward];
+  E7 -> E7 [label="LS_VR_EDGE=1 && !bridge_reversed /\l  rollers stop, bridge back\l", color="#898781", fontcolor="#898781", penwidth=1.2, dir=forward];
+  E8 -> E8 [label="tick100ms / read ADC0 (H) or ADC1 (V)\ltick_adc0, H <= 41 cm / stop VR_IN\ltick_adc1, V <= 41 cm / stop HR_DOWN\l", color="#898781", fontcolor="#898781", penwidth=1.2, dir=forward];
+  E9 -> E9 [label="tick100ms / read ADC0, then ADC1\lH < 30 cm / VR_OUT    H > 50 cm / VR_IN\lV < 30 cm / HR_UP     V > 50 cm / HR_DOWN\lback at 40 cm / stop that correction\l", color="#898781", fontcolor="#898781", penwidth=1.2, dir=forward];
+  E20 -> E20 [label="tick1s / toggle green light\l", color="#898781", fontcolor="#898781", penwidth=1.2, dir=forward];
+}

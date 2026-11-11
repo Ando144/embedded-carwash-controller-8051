@@ -11,6 +11,7 @@
 ;      both dispatched with jump tables (JMP @A+DPTR).
 ;    - Timer 0 ISR : 50 ms time base -> tick100ms / tick1s / tick4s /
 ;                    tick30s / tick60s software flags.
+;    - Version 1.1 : bug-fix release, see CHANGELOG.md
 ;    - ADC ISR     : end-of-conversion -> tick_adc0 / tick_adc1 flags.
 ;    - PWM0        : roller motor.  PWM1 : air dryer.
 ;
@@ -71,7 +72,7 @@ VR_IN_ON        EQU	0x21.2		;E9: correction in progress, rollers IN
 VR_OUT_ON       EQU	0x21.3		;E9: correction in progress, rollers OUT
 HR_UP_ON        EQU	0x21.4		;E9: correction in progress, roller UP
 HR_DOWN_ON      EQU	0x21.5		;E9: correction in progress, roller DOWN
-FLAG0           EQU	0x21.2		;E7: bridge reversal done (NOTE: same bit address as VR_IN_ON)
+bridge_reversed EQU	0x21.6		;E7: bridge already reversed at the roller edge
 
 ORG	0x00
 	AJMP	Main
@@ -123,7 +124,7 @@ Main_Loop:
 	AJMP	Main_Loop
 
 Init:
-	MOV	STATE,#0x07		;-------------! initial state (0x07 = E7)
+	MOV	STATE,#0x00		;initial state: E0 Idle
 	MOV	EVENT,#0x00
 	ANL	TMOD,#0xF0		;program Timer 0 (mode 1, 16-bit)
 	ORL	TMOD,#0x01
@@ -141,7 +142,6 @@ Init:
 	CLR	ALARM_START
 	CLR	LED_NORMAL
 	CLR	LED_INTENSE
-	CLR	ALARM_START
 	CLR	VALVE_WATER
 	CLR	VALVE_SOAP
 	CLR	BRIDGE_BACK
@@ -150,7 +150,7 @@ Init:
 	CLR	VR_OUT
 	CLR	HR_DOWN
 	CLR	HR_UP
-	MOV	PWMP,#0x18		;program the PWM prescaler (1 kHz)
+	MOV	PWMP,#0x17		;PWM prescaler: 12 MHz/(2*255*24) = 0.98 kHz
 	MOV	PWM0,#0xFF
 	MOV	PWM1,#0xFF
 	MOV	cnt50ms,#0x00		;clear all counters and flags
@@ -162,7 +162,9 @@ Init:
 	CLR	tick4s
 	CLR	tick_adc0
 	CLR	tick_adc1
-	CLR	FLAG0
+	CLR	bridge_reversed
+	CLR	dist_ok
+	CLR	height_ok
 	CLR	VR_IN_ON
 	CLR	VR_OUT_ON
 	CLR	HR_UP_ON
@@ -279,8 +281,8 @@ E1_ACT1:
 	CLR	ALARM_START
 	CLR	tick30s
 	CLR	tick60s
-	CLR	cnt50ms
-	CLR	cnt1s
+	MOV	cnt50ms,#0x00		;restart the 30 s / 60 s count
+	MOV	cnt1s,#0x00
 	MOV	STATE,#0x02
 	RET
 
@@ -510,7 +512,7 @@ EVENT7_2:
 	MOV	EVENT,#0x02
 	RET
 Check_Flag:
-	JB	FLAG0,EVENT7_0
+	JB	bridge_reversed,EVENT7_0
 	JMP	EVENT7_1
 
 E7_ACT0:
@@ -519,13 +521,16 @@ E7_ACT0:
 E7_ACT1:
 	CLR	VR_OUT
 	SETB	BRIDGE_BACK
-	SETB	FLAG0
+	SETB	bridge_reversed
 	RET
 
 E7_ACT2:
 	SETB	VR_IN
 	SETB	HR_DOWN
 	CLR	BRIDGE_BACK
+	CLR	bridge_reversed		;ready for the next car
+	CLR	dist_ok			;E8 starts with both distances unknown
+	CLR	height_ok
 	MOV	STATE,#0x08
 	ACALL	Timer_Start
 	RET
@@ -607,7 +612,6 @@ E8_ACT0:
 	RET
 
 E8_ACT1:
-	MOV	cnt50ms,#0x00
 	MOV	A,#0x00
 	ACALL	ADC_Start
 	RET
@@ -661,6 +665,7 @@ ACTIONS_9:
 	AJMP	E9_ACT8
 	AJMP	E9_ACT9
 	AJMP	E9_ACT10
+	AJMP	E9_ACT11
 
 EVENT_GEN_9:
 	JNB	S_CAR,EVENT9_9
@@ -699,7 +704,7 @@ H_GT_50:
 	MOV	EVENT,#0x03
 	RET
 H_NOT_GT_50:
-	MOV	EVENT,#0x00
+	MOV	EVENT,#0x0B		;H in range: go on with V
 	RET
 vr_in_is_on:
 	CLR	tick_adc0
@@ -712,7 +717,7 @@ H_LT_40:
 	RET
 H_GT_40:
 	JC	H_LT_40
-	MOV	EVENT,#0x00
+	MOV	EVENT,#0x0B		;still moving: go on with V
 	RET
 vr_out_is_on:
 	CLR	tick_adc0
@@ -725,7 +730,7 @@ H_GT_40_2:
 	RET
 H_LT_40_2:
 	JNC	H_GT_40_2
-	MOV	EVENT,#0x00
+	MOV	EVENT,#0x0B		;still moving: go on with V
 	RET
 EVENT9_ADC1:
 	JB	HR_UP_ON,hr_up_is_on
@@ -782,7 +787,6 @@ E9_ACT0:
 	RET
 
 E9_ACT1:
-	MOV	cnt50ms,#0x00
 	MOV	A,#0x00
 	ACALL	ADC_Start
 	RET
@@ -829,12 +833,21 @@ E9_ACT9:
 	CLR	HR_DOWN
 	CLR	VR_OUT
 	SETB	HR_UP
+	CLR	VR_IN_ON		;no correction in progress any more
+	CLR	VR_OUT_ON
+	CLR	HR_UP_ON
+	CLR	HR_DOWN_ON
 	ACALL	Timer_Stop
 	MOV	STATE,#0x0A
 	RET
 
 E9_ACT10:
 	CLR	HR_UP
+	RET
+
+E9_ACT11:
+	MOV	A,#0x01			;request ADC1 (V)
+	ACALL	ADC_Start
 	RET
 
 ;------------------------------------------------------------------------------
@@ -962,6 +975,7 @@ E13_ACT0:
 	RET
 
 E13_ACT1:
+	CLR	VR_OUT			;rollers reached the edge
 	SETB	BRIDGE_FWD
 	ACALL	PWM0_Off
 	MOV	STATE,#0x0E
@@ -1204,21 +1218,19 @@ E20_ACT2:
 	CLR	LIGHT_RED
 	ACALL	Timer_Stop
 	MOV	STATE,#0x00
-				;(no RET here: execution continues into Timer_Start)
+	RET
 
 ;------------------------------------------------------------------------------
 ; TIMER 0 HELPERS: start / stop / restart
 ;------------------------------------------------------------------------------
 
 Timer_Start:
-	MOV	TL0,#0xB0
-	MOV	TH0,#0x3C
-	ORL	IEN0,#0x82
+	ACALL	Timer_Restart		;reload and clear counters / ticks
 	SETB	TR0
 	RET
 
 ;------------------------------------------------------------------------------
-; Timer_Stop (stop Timer 0) / Timer_Restart (keep running): clear counters and ticks
+; Timer_Stop (stop Timer 0) / Timer_Restart (reload, keep running): clear counters and ticks
 ;------------------------------------------------------------------------------
 
 Timer_Stop:
@@ -1246,48 +1258,38 @@ Timer_Restart:
 	RET
 
 ;------------------------------------------------------------------------------
-; TIMER COUNTERS AND TICK FLAGS (called from the Timer 0 ISR)
+; TIMER COUNTERS AND TICK FLAGS (called from the Timer 0 ISR, every 50 ms)
+;   cnt50ms counts 0..19 and wraps every second, cnt1s counts seconds.
+;   tick100ms : every second interrupt (cnt50ms even)
+;   tick1s    : every time cnt50ms wraps
+;   tick4s / tick30s / tick60s : once, when cnt1s reaches 4 / 30 / 60
 ;------------------------------------------------------------------------------
 
 Unit_Conversion:
-	MOV	A,0x14
-	CJNE	A,cnt50ms,end_UC
-	INC	cnt1s
+	MOV	A,cnt50ms
+	CLR	C
+	SUBB	A,#0x14			;20 x 50 ms = 1 s
+	JC	end_UC			;cnt50ms < 20
 	MOV	cnt50ms,#0x00
+	INC	cnt1s
 end_UC:
 	RET
 
 Flag_Compare:
-	MOV	A,#0x02
-	CLR	C
-	CJNE	A,cnt50ms,end100ms
+	MOV	A,cnt50ms
+	JB	ACC.0,Flags_Done	;odd count: no new 100 ms period
 	SETB	tick100ms
-end100ms:
-	JNC	Flags_Done
-	MOV	A,#0x01			;compare_1s:
-	CLR	C
-	CJNE	A,cnt1s,end1s
+	JNZ	Flags_Done		;not a full second yet
 	SETB	tick1s
-end1s:
-	JNC	Flags_Done
-	MOV	A,#0x04			;compare_4s:
-	CLR	C
-	CJNE	A,cnt1s,end4s
+	MOV	A,cnt1s
+	CJNE	A,#0x04,check30s
 	SETB	tick4s
-end4s:
-	JNC	Flags_Done
-	MOV	A,#0x1E			;compare_30s:
-	CLR	C
-	CJNE	A,cnt1s,end30s
+check30s:
+	CJNE	A,#0x1E,check60s
 	SETB	tick30s
-end30s:
-	JNC	Flags_Done
-	MOV	A,#0x3C			;compare_60s:
-	CLR	C
-	CJNE	A,cnt1s,end60s
+check60s:
+	CJNE	A,#0x3C,Flags_Done
 	SETB	tick60s
-end60s:
-	JNC	Flags_Done
 Flags_Done:
 	RET
 
@@ -1311,18 +1313,18 @@ ADC_Start:
 
 PWM0_On:
 	JB	TOKEN_TYPE,PWM0_Intense
-	MOV	PWM0,#0x80
+	MOV	PWM0,#0x80		;50 %
 	RET
 PWM0_Intense:
-	MOV	PWM0,#0x80
+	MOV	PWM0,#0x00		;100 %
 	RET
 
 PWM1_On:
 	JB	TOKEN_TYPE,PWM1_Intense
-	MOV	PWM1,#0x26
+	MOV	PWM1,#0x80		;50 %
 	RET
 PWM1_Intense:
-	MOV	PWM1,#0x00
+	MOV	PWM1,#0x26		;85 %
 	RET
 
 			;--- disable ---

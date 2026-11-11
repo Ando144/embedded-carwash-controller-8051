@@ -9,7 +9,8 @@
 ![MCU](https://img.shields.io/badge/MCU-Philips%2FNXP%2080C552-informational)
 ![Toolchain](https://img.shields.io/badge/toolchain-Keil%20%C2%B5Vision%20A51-orange)
 ![Peripherals](https://img.shields.io/badge/peripherals-Timer%20%7C%20ADC%20%7C%20PWM%20%7C%20GPIO-success)
-![Status](https://img.shields.io/badge/status-complete%20(simulated)-brightgreen)
+[![Firmware tests](https://github.com/Ando144/embedded-carwash-controller-8051/actions/workflows/firmware-tests.yml/badge.svg)](https://github.com/Ando144/embedded-carwash-controller-8051/actions/workflows/firmware-tests.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)](LICENSE)
 
 </div>
 
@@ -27,7 +28,15 @@ distance sensors, so the system adapts to the shape of each car in real time.
 
 Everything runs on an 8-bit 8051 core at 12 MHz with **no operating system and no C runtime**:
 about 1,300 lines of hand-written assembly built on interrupts, jump tables and on-chip
-peripherals.
+peripherals. A custom **instruction-level simulator** runs the same source in CI, so every
+change is tested against a full wash cycle.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/wash_cycle_dark.png">
+  <img alt="Simulated wash cycle: bridge position by phase, and side / roof roller distances staying inside the 30-50 cm window while brushing" src="docs/img/wash_cycle.png">
+</picture>
+
+<sub>One wash cycle, produced by the simulator in <code>tools/sim</code> running the real firmware.</sub>
 
 ## Highlights
 
@@ -36,8 +45,9 @@ peripherals.
 | **21-state finite state machine** | Table-driven design: every state is an *event generator* plus an *action table*, both dispatched in constant time with `JMP @A+DPTR`. Adding or changing a state means editing a single block. |
 | **Interrupt-driven time base** | Timer 0 interrupts every **50 ms** and produces 100 ms, 1 s, 4 s, 30 s and 60 s software ticks for timeouts, delays and blinking. |
 | **Closed-loop roller control** | Two ADC channels measure the roller-to-car distance every 100 ms. The rollers are kept in a **30–50 cm** window with **hysteresis** around 40 cm, so the motors don't oscillate. |
-| **PWM motor and blower control** | PWM0 drives the brush motor and PWM1 the air dryer, whose power depends on the selected program (85 % normal, 100 % intense). |
+| **PWM motor and blower control** | PWM0 drives the brush motor and PWM1 the air dryer. Their power depends on the selected program: brush 50 % / 100 %, dryer 50 % / 85 % (normal / intense). |
 | **Short ISRs** | The interrupt routines only set flags. All decisions are taken in the main loop, which keeps interrupt latency low and the behaviour deterministic. |
+| **Tested without hardware** | An instruction-level 80C552 simulator (Python, no dependencies) runs the firmware against a model of the car wash. 18 automated tests check the full cycle, timings, closed-loop limits and PWM levels on every push (GitHub Actions). |
 | **Fully documented** | Includes timer, ADC and PWM calculations, state, event and action tables, and an I/O map ([design document](docs/DESIGN.md)). |
 
 ## Wash cycle
@@ -129,7 +139,7 @@ Sensor: 50 mV/cm on a 0–5 V, 8-bit ADC → `0x4D` = 30 cm, `0x66` = 40 cm, `0x
 | Timer 0 reload | `TH0=0x3C`, `TL0=0xB0` | 2¹⁶ − 50 000 = 15 536 → 50 ms |
 | 1 s tick | 20 × 50 ms | software counter in the ISR |
 | ADC 30 / 40 / 50 cm | `0x4D` / `0x66` / `0x80` | 2⁸ · V<sub>in</sub> / 5 V |
-| PWM prescaler | `PWMP = 0x18` | ≈ 1 kHz carrier |
+| PWM prescaler | `PWMP = 0x17` | 12 MHz / (2·255·24) ≈ 0.98 kHz |
 | PWM duty | `0x80` = 50 %, `0x26` = 85 %, `0x00` = 100 % | D = (255 − PWMx) / 255 |
 
 Full derivations: [docs/DESIGN.md § Calculations](docs/DESIGN.md#5-calculations).
@@ -156,9 +166,27 @@ Full derivations: [docs/DESIGN.md § Calculations](docs/DESIGN.md#5-calculations
 | AIN0 / AIN1 | H / V distance | analog | Vertical rollers / horizontal roller distance to the car |
 | PWM0 / PWM1 | — | PWM | Brush motor / air dryer |
 
-## Running it
+## Testing without hardware
 
-The project targets the **Keil µVision** simulator, so no hardware is needed.
+```bash
+python tools/sim/run_sim.py                  # simulate one car and print the state timeline
+python -m unittest discover -s tools/sim -v  # run the automated test suite
+```
+
+The simulator ([`tools/sim`](tools/sim)) reads the A51 source directly and executes it cycle by
+cycle, with Timer 0, the ADC and its interrupts modelled. The plant model moves the bridge and
+the rollers and generates the sensor signals for a car with a curved side and roof. The tests
+check that:
+
+- the machine goes through E0 → E20 → E0 for both programs and for two cars in a row
+- the 4 s, 30 s and 60 s timings are exact, and the green light blinks at 1 Hz
+- both rollers stay within 30–50 cm of the car while brushing
+- PWM levels, LEDs and the final "everything off, timer stopped" state are correct
+- no two flags share the same RAM bit
+
+## Running it in Keil µVision
+
+The project was developed with the **Keil µVision** simulator.
 
 1. Create a new µVision project and select the device **Philips 80C552**.
 2. Add [`src/carwash_controller.asm`](src/carwash_controller.asm) to the project and build it (A51 assembler).
@@ -167,8 +195,8 @@ The project targets the **Keil µVision** simulator, so no hardware is needed.
    inputs and watch the outputs.
 5. Set the analog distances from the command window, e.g. `AIN0 = 2.0` (40 cm) or `AIN1 = 1.4` (28 cm).
 
-> **Note:** the start-up state is set in `Init` with `MOV STATE,#0x07`, so the program starts at
-> E7 (roller positioning). Change it to `#0x00` to run the full cycle from Idle.
+A typical run: set `P0.2 = 1` (car on the platform), pulse `P0.4` (token), pulse `P0.5` (START),
+then follow the bridge outputs on P1 and toggle `P2.3` (car detected) as the bridge passes the car.
 
 ## Repository structure
 
@@ -177,11 +205,24 @@ The project targets the **Keil µVision** simulator, so no hardware is needed.
 │   └── carwash_controller.asm        # Complete firmware (80C552, A51 syntax)
 ├── docs/
 │   ├── DESIGN.md                     # English design document: FSM, tables, calculations, glossary
+│   ├── img/                          # Charts generated by the simulator
 │   └── original-basque/
 │       ├── Final_Report_Basque.pdf   # Original lab report (Basque)
 │       └── State_Diagram_Basque.pdf  # Original hand-drawn state diagram (Basque)
+├── tools/sim/                        # 80C552 simulator, car wash model and automated tests
+├── .github/workflows/                # CI: runs the simulation tests on every push
+├── CHANGELOG.md                      # Version history and bug fixes
+├── LICENSE                           # MIT
 └── README.md
 ```
+
+## Version history
+
+The original lab version (v1.0) was translated from Basque and then reviewed. The review found
+several bugs, all fixed in **v1.1**. Among them: the seconds counter only advanced every 12.8 s
+(a "4 s" delay took 51 s), the horizontal roller was not height-controlled while the side distance
+was correct, two flags shared the same RAM bit, and some flags were never reset between cars.
+Details in [CHANGELOG.md](CHANGELOG.md).
 
 ## Skills demonstrated
 
@@ -191,10 +232,12 @@ The project targets the **Keil µVision** simulator, so no hardware is needed.
 - Designing an event-driven finite state machine and implementing it efficiently in assembly
 - Closed-loop control with hysteresis using sensor feedback
 - Engineering documentation: state, event and action tables, flowcharts, calculations
+- Code review and debugging of legacy embedded code (see the v1.1 changelog)
+- Test automation for embedded code: a purpose-built simulator, hardware model and CI pipeline
 
 ## Authors
 
-- **Andoni Ortiz de Zárate Urruela** — [@Ando144](https://github.com/Ando144)
+- **Andoni Ortiz de Zarate Urruela** — [@Ando144](https://github.com/Ando144)
 - **Markel Valle Vivanco**
 
 Final lab project for **Computer Architecture** (*Konputagailuen Arkitektura*), Department of
@@ -203,3 +246,5 @@ Systems. **Bilbao School of Engineering, University of the Basque Country (UPV/E
 
 The source code and documentation were originally written in Basque and have been translated
 into English. The original report is kept in [`docs/original-basque`](docs/original-basque).
+
+Released under the [MIT License](LICENSE).

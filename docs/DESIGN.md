@@ -4,7 +4,9 @@ English technical documentation of the project. It is a translation of the origi
 Basque lab report ([`original-basque/Final_Report_Basque.pdf`](original-basque/Final_Report_Basque.pdf)),
 checked line by line against the final source code in [`src/carwash_controller.asm`](../src/carwash_controller.asm).
 Where the report and the code differ, this document describes **what the code does**, and the
-difference is pointed out in a note.
+difference is pointed out in a note. It describes **version 1.1**, which fixes the bugs found while
+translating the original code (see [`CHANGELOG.md`](../CHANGELOG.md)). The behaviour described
+here is checked automatically by the simulator and tests in [`tools/sim`](../tools/sim).
 
 **Contents**
 
@@ -28,7 +30,8 @@ learned what was needed to build the system: **Timer, PWM and ADC**.
 As the work progressed, the state diagram and the code changed a lot until they became the
 versions shown here. The original report includes both the version submitted at the
 intermediate delivery and the final version, with the changes in the final version highlighted.
-This repository contains the final version.
+This repository contains that final version, translated into English, plus the bug fixes of
+version 1.1.
 
 ---
 
@@ -113,7 +116,7 @@ ADC thresholds: `0x4D` = 30 cm, `0x66` = 40 cm, `0x69` ≈ 41 cm, `0x80` = 50 cm
 |---|-------|--------|------|
 | 3 | `S_PLATFORM = 0` (car left) | Green light on, red off, alarm off, stop Timer 0 | E0 |
 | 2 | `tick30s` (30 s without token) | `ALARM_START = 1` | E1 |
-| 1 | `S_TOKEN = 1` | Alarm off, clear `tick30s` / `tick60s` | E2 |
+| 1 | `S_TOKEN = 1` | Alarm off, clear `tick30s` / `tick60s`, restart the counters so that the 30 s / 60 s of E2 are measured from the token | E2 |
 
 ### E2 — Wait for start
 
@@ -153,8 +156,8 @@ ADC thresholds: `0x4D` = 30 cm, `0x66` = 40 cm, `0x69` ≈ 41 cm, `0x80` = 50 cm
 
 | # | Event | Action | Next |
 |---|-------|--------|------|
-| 2 | `S_CAR = 1` | Vertical rollers in, horizontal roller down, stop bridge, start Timer 0 | E8 |
-| 1 | `LS_VR_EDGE = 1` and `FLAG0 = 0` | Stop rollers, bridge backwards, `FLAG0 = 1` | E7 |
+| 2 | `S_CAR = 1` | Vertical rollers in, horizontal roller down, stop bridge, clear `bridge_reversed`, `dist_ok` and `height_ok`, start Timer 0 | E8 |
+| 1 | `LS_VR_EDGE = 1` and `bridge_reversed = 0` | Stop rollers, bridge backwards, `bridge_reversed = 1` | E7 |
 
 ### E8 — Approach rollers (to 40 cm)
 
@@ -176,19 +179,24 @@ reading only checks whether 40 cm has been reached (hysteresis).
 
 | # | Event | Action | Next |
 |---|-------|--------|------|
-| 9 | `S_CAR = 0` (end of car) | Stop bridge, stop all rollers, horizontal roller up, stop Timer 0 | E10 |
+| 9 | `S_CAR = 0` (end of car) | Stop bridge, stop all rollers, horizontal roller up, clear the `*_ON` flags, stop Timer 0 | E10 |
 | 1 | `tick100ms` | Request ADC0 | E9 |
 | 2 | `tick_adc0`, H < 30 cm | `VR_OUT_ON = 1`, rollers out, request ADC1 | E9 |
 | 3 | `tick_adc0`, H > 50 cm | `VR_IN_ON = 1`, rollers in, request ADC1 | E9 |
 | 4 | `tick_adc0`, `VR_OUT_ON = 1`, H ≥ 40 cm | `VR_OUT_ON = 0`, stop rollers out, request ADC1 | E9 |
 | 5 | `tick_adc0`, `VR_IN_ON = 1`, H ≤ 40 cm | `VR_IN_ON = 0`, stop rollers in, request ADC1 | E9 |
+| 11 | `tick_adc0`, any other case (H in range, or correction still running) | Request ADC1 | E9 |
 | 6 | `tick_adc1`, V < 30 cm | `HR_UP_ON = 1`, roller up | E9 |
 | 7 | `tick_adc1`, V > 50 cm | `HR_DOWN_ON = 1`, roller down | E9 |
 | 10 | `tick_adc1`, `HR_UP_ON = 1`, V ≥ 40 cm | `HR_UP_ON = 0`, stop roller up | E9 |
 | 8 | `tick_adc1`, `HR_DOWN_ON = 1`, V ≤ 40 cm | `HR_DOWN_ON = 0`, stop roller down | E9 |
 
-> Note: the original report table lists event 10 as `tick_adc0 && UP_PIZTU`; in the code it is
-> correctly handled on `tick_adc1` (the V channel).
+Every 100 ms both channels are read: ADC0 first, then ADC1 when the ADC0 conversion finishes.
+
+> Notes: the original report table lists event 10 as `tick_adc0 && UP_PIZTU`; in the code it is
+> handled on `tick_adc1` (the V channel). Event 11 is new in version 1.1: before, ADC1 was only
+> read when H needed a correction, so the height of the horizontal roller was not controlled while
+> the side distance was correct.
 
 ### E10 – E20
 
@@ -197,7 +205,7 @@ reading only checks whether 40 cm has been reached (hysteresis).
 | E10 Raise H-roller | `LS_HR_TOP = 1` | Bridge backwards, stop roller up, start Timer 0 | E11 |
 | E11 Position | `tick4s` | Stop bridge, vertical rollers in, stop Timer 0 | E12 |
 | E12 Wash front | `LS_VR_CENTER = 1` | Rollers: stop in, start out | E13 |
-| E13 Place rollers | `LS_VR_EDGE = 1` | Bridge forward, PWM0 (roller motor) off | E14 |
+| E13 Place rollers | `LS_VR_EDGE = 1` | Stop rollers, bridge forward, PWM0 (roller motor) off | E14 |
 | E14 Position for rinse | `S_CAR = 1` | Water on | E15 |
 | E15 Rinse | `S_CAR = 0` | Water off, start Timer 0 | E16 |
 | E16 Position 40 cm | `tick4s` | Bridge: stop forward, start backwards; stop Timer 0 | E17 |
@@ -259,6 +267,11 @@ flowchart TB
 ISRs only set flags; all decisions are taken in the main loop by the event generators. This keeps
 the interrupt routines short and the timing predictable.
 
+Tick generation (version 1.1): `cnt50ms` counts 0–19 and wraps every second, incrementing `cnt1s`.
+`tick100ms` is set on every even value of `cnt50ms`, `tick1s` on every wrap, and `tick4s`,
+`tick30s` and `tick60s` once, when `cnt1s` reaches 4, 30 and 60. `Timer_Start` always clears the
+counters, so every delay is measured from the moment the timer is started.
+
 ---
 
 ## 5. Calculations
@@ -277,6 +290,10 @@ $$2^{16} - 50\,000 = 15\,536 = \text{0x3CB0} \;\Rightarrow\; TH0 = \text{0x3C},\
 
 To get one second: 1 s = 1000 ms = **20 × 50 ms**. Counting 50 ms twenty times gives one second,
 and from that the 1 s, 4 s, 30 s and 60 s ticks are built.
+
+> Note: in the original code the comparison was written `MOV A,0x14` (the content of RAM address
+> 0x14) instead of `MOV A,#0x14` (the number 20). The seconds counter therefore only advanced every
+> 256 × 50 ms = 12.8 s. Version 1.1 fixes this.
 
 ### 5.2 ADC
 
@@ -302,12 +319,12 @@ oscillator. Data: F<sub>osc</sub> = 12 MHz, F<sub>PWM</sub> = 1 kHz.
 
 $$PWMP = \frac{F_{osc}}{2\times255\times F_{PWM}} - 1$$
 
-The firmware loads **PWMP = 0x18 (24)**, which gives
-F<sub>PWM</sub> = 12 MHz / (2 · 255 · 25) ≈ **941 Hz** (≈ 1 kHz).
+$$PWMP = \frac{12\,\text{MHz}}{2\times255\times1\,\text{kHz}} - 1 = 23.53 - 1 = 22.53 \rightarrow 23 = \text{0x17}$$
 
-> Note: the original report computes 12 MHz / (2·255·1 kHz) = 23.53 and rounds it to 24 before
-> subtracting 1. Applying the formula exactly gives 22.53 → 23 (0x17, ≈ 1.02 kHz). Both values
-> are within a few percent of the 1 kHz target.
+With PWMP = 0x17 the real frequency is 12 MHz / (2 · 255 · 24) ≈ **980 Hz**.
+
+> Note: the original report rounded 23.53 to 24 *before* subtracting 1 and used 0x18
+> (≈ 941 Hz). Version 1.1 uses 0x17, the value closest to 1 kHz.
 
 Duty cycle (80C552):
 
@@ -324,13 +341,14 @@ Values loaded by the firmware:
 
 | Output | Normal program (`TOKEN_TYPE = 0`) | Intense program (`TOKEN_TYPE = 1`) |
 |--------|-----------------------------------|------------------------------------|
-| PWM0 — roller motor | 0x80 (50 %) | 0x80 (50 %) |
-| PWM1 — air dryer    | 0x26 (85 %) | 0x00 (100 %) |
+| PWM0 — roller motor | 0x80 (50 %) | 0x00 (100 %) |
+| PWM1 — air dryer    | 0x80 (50 %) | 0x26 (85 %) |
 
-> Note: the report's data section lists PWM0 = 50 % / 100 % and PWM1 = 50 % / 85 %. The table
-> above shows the values actually used in the final code.
+> Note: these are the values given in the report's data section (PWM0 = 50 % / 100 %,
+> PWM1 = 50 % / 85 %). The original code used 50 % / 50 % for PWM0 and 85 % / 100 % for PWM1;
+> version 1.1 follows the report.
 
-At start-up PWMP is set to 0x18 and both PWM outputs to 0xFF (off); each state then writes the
+At start-up PWMP is set to 0x17 and both PWM outputs to 0xFF (off); each state then writes the
 duty value it needs.
 
 ---
@@ -389,6 +407,7 @@ in the English source code.
 | `Hasiera` / `Begizta` | `Main` / `Main_Loop` | `Hasieraketak` | `Init` |
 | `Egoera_Makina` / `Egoera_Zerrenda` | `State_Machine` / `State_Table` | `GERTAERA_SORGAILU_n` | `EVENT_GEN_n` |
 | `EKINTZAK_n` | `ACTIONS_n` | `En_EKk` | `En_ACTk` |
+| `FLAG0` | `bridge_reversed` | | |
 | `Timer_Hasieratu` | `Timer_Start` | `Timer_Amatatu` | `Timer_Stop` |
 | `Timer_BirHasieratu` | `Timer_Restart` | `ADC_Hasieratu` | `ADC_Start` |
 | `Unitate_Bihurketa` | `Unit_Conversion` | `Flag_Konp` | `Flag_Compare` |
